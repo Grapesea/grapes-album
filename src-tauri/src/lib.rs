@@ -185,10 +185,50 @@ fn error_string(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+fn thumbnail_response(
+    app: &AppHandle,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response, StatusCode};
+
+    let asset_id = request.uri().path().trim_matches('/');
+    let state = app.state::<AppState>();
+    let workspace = state
+        .session
+        .lock()
+        .ok()
+        .and_then(|session| session.as_ref().map(|session| session.workspace.clone()));
+    let path = workspace.and_then(|workspace| {
+        workspace
+            .lock()
+            .ok()
+            .and_then(|workspace| workspace.asset_thumbnail_path(asset_id).ok())
+    });
+    let Some(path) = path else {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(b"thumbnail not found".to_vec())
+            .unwrap_or_else(|_| Response::new(b"thumbnail not found".to_vec()));
+    };
+    let bytes = std::fs::read(path).unwrap_or_default();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(
+            header::CACHE_CONTROL,
+            "private, max-age=31536000, immutable",
+        )
+        .body(bytes)
+        .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("grapes-thumb", |context, request| {
+            thumbnail_response(context.app_handle(), request)
+        })
         .setup(|app| {
             app.manage(AppState::default());
             Ok(())

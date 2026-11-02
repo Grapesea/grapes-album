@@ -148,6 +148,36 @@ fn exif_metadata_is_persisted_in_the_asset_snapshot() {
 }
 
 #[test]
+fn reconciliation_generates_and_reuses_thumbnail_cache() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    image::RgbImage::from_fn(900, 600, |x, y| {
+        image::Rgb([(x % 255) as u8, (y % 255) as u8, 90])
+    })
+    .save(temp.path().join("large.jpg"))
+    .expect("save photo");
+
+    let mut workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let first = workspace.snapshot().expect("snapshot");
+    assert!(first.assets[0].has_thumbnail);
+    assert!(
+        first
+            .last_reconcile
+            .as_ref()
+            .expect("report")
+            .thumbnails_created
+            >= 1
+    );
+
+    let asset_id = first.assets[0].id.clone();
+    let thumbnail_path = workspace
+        .asset_thumbnail_path(&asset_id)
+        .expect("thumbnail");
+    assert!(thumbnail_path.is_file());
+    let second_report = workspace.reconcile().expect("second reconcile");
+    assert_eq!(second_report.thumbnails_created, 0);
+}
+
+#[test]
 fn startup_marks_crashed_operations_interrupted_before_reconcile() {
     let temp = tempfile::tempdir().expect("tempdir");
     write_photo(&temp.path().join("photo.jpg"), b"photo");

@@ -35,10 +35,11 @@ pub struct AssetView {
     pub content_hash: Option<String>,
     pub tags: Vec<String>,
     pub metadata: MediaMetadata,
+    pub has_thumbnail: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ReconcileReport {
     pub scanned_folders: usize,
     pub scanned_assets: usize,
@@ -49,6 +50,7 @@ pub struct ReconcileReport {
     pub assets_moved: usize,
     pub assets_removed: usize,
     pub content_changed: usize,
+    pub thumbnails_created: usize,
     pub finished_at: String,
     pub warnings: Vec<String>,
 }

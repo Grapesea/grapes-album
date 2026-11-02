@@ -25,6 +25,7 @@ export interface AssetView {
   contentHash: string | null;
   tags: string[];
   metadata: PhotoMetadata;
+  hasThumbnail: boolean;
 }
 
 export interface PhotoMetadata {
@@ -54,6 +55,7 @@ export interface ReconcileReport {
   assetsMoved: number;
   assetsRemoved: number;
   contentChanged: number;
+  thumbnailsCreated: number;
   finishedAt: string;
   warnings: string[];
 }

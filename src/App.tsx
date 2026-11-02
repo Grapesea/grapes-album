@@ -43,6 +43,7 @@ import type {
 import { FileTree } from "./components/FileTree";
 import { Inspector } from "./components/Inspector";
 import { AssetTags } from "./components/AssetTags";
+import { AssetThumbnail } from "./components/AssetThumbnail";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { useI18n } from "./i18n";
 
@@ -590,9 +591,7 @@ export default function App() {
                     }}
                   >
                     <span className="asset-name">
-                      <span className="asset-type">
-                        {extension(asset.filename)}
-                      </span>
+                      <AssetThumbnail asset={asset} />
                       <span>
                         <strong>{asset.filename}</strong>
                         <small>{asset.relativePath}</small>
@@ -734,10 +733,6 @@ function countAssetsInFolder(
   folderId: string,
 ) {
   return snapshot.assets.filter((asset) => asset.folderId === folderId).length;
-}
-
-function extension(filename: string) {
-  return (filename.split(".").pop() ?? "IMG").toUpperCase().slice(0, 4);
 }
 
 function formatModifiedAt(

@@ -1146,20 +1146,37 @@ code,
   gap: 10px;
 }
 
-.asset-type {
+.asset-thumb {
+  position: relative;
   display: flex;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(169, 135, 255, 0.15);
-  border-radius: 7px;
+  border-radius: 8px;
+  overflow: hidden;
   background:
     linear-gradient(145deg, rgba(169, 135, 255, 0.12), transparent),
     #221c29;
   color: var(--violet-light);
-  font-size: 7px;
+}
+
+.asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-thumb.fallback {
+  flex-direction: column;
+  gap: 1px;
+}
+
+.asset-thumb.fallback small {
+  color: var(--violet-light);
+  font-size: 6px;
   font-weight: 700;
 }
 

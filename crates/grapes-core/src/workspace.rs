@@ -17,7 +17,8 @@ use crate::filesystem::{
     file_identity, hash_file, hash_to_hex, is_image_file, scan_workspace,
     validation::validate_name, ScannedAsset,
 };
-use crate::media::{extract_metadata, MediaMetadata};
+use crate::media::thumbnail::thumbnail_path;
+use crate::media::{ensure_thumbnail, extract_metadata, MediaMetadata, ThumbnailResult};
 use crate::types::{AssetView, FolderView, ReconcileReport, WorkspaceSnapshot, WorkspaceView};
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -63,6 +64,8 @@ struct AssetPlan {
     changed: bool,
     metadata: MediaMetadata,
     metadata_json: String,
+    source_path: PathBuf,
+    has_thumbnail: bool,
 }
 
 impl Workspace {
@@ -182,6 +185,13 @@ impl Workspace {
                     .unwrap_or_default();
                 let relative_path = join_relative(&parent, &asset.filename);
                 let metadata = metadata_from_row(&asset);
+                let has_thumbnail = asset
+                    .content_hash
+                    .as_deref()
+                    .map(|hash| {
+                        thumbnail_path(&self.root.join(".grapes/thumbnails"), hash).is_file()
+                    })
+                    .unwrap_or(false);
                 AssetView {
                     id: asset.id,
                     folder_id: asset.folder_id,
@@ -193,6 +203,7 @@ impl Workspace {
                     content_hash: asset.content_hash.as_deref().map(hash_to_hex),
                     tags,
                     metadata,
+                    has_thumbnail,
                 }
             })
             .collect::<Vec<_>>();
@@ -496,7 +507,33 @@ impl Workspace {
                 changed,
                 metadata,
                 metadata_json,
+                source_path: scanned.physical_path.clone(),
+                has_thumbnail: false,
             });
+        }
+
+        let thumbnails_dir = self.root.join(".grapes/thumbnails");
+        for asset in &mut asset_plans {
+            match ensure_thumbnail(
+                &asset.source_path,
+                &thumbnails_dir,
+                &asset.hash,
+                asset.metadata.orientation,
+            ) {
+                Ok(ThumbnailResult::Created) => {
+                    asset.has_thumbnail = true;
+                    report.thumbnails_created += 1;
+                }
+                Ok(ThumbnailResult::Existing) => {
+                    asset.has_thumbnail = true;
+                }
+                Ok(ThumbnailResult::Unsupported) => {}
+                Err(error) => {
+                    report
+                        .warnings
+                        .push(format!("{} 缩略图生成失败：{error}", asset.filename));
+                }
+            }
         }
 
         let removed_asset_ids = old_assets
@@ -710,6 +747,19 @@ impl Workspace {
             }
         }
         self.db.set_asset_tags(asset_id, &normalized)
+    }
+
+    pub fn asset_thumbnail_path(&self, asset_id: &str) -> Result<PathBuf> {
+        let asset = self.db.asset(asset_id)?;
+        let hash = asset
+            .content_hash
+            .ok_or_else(|| GrapesError::NotFound("照片缩略图尚未生成".into()))?;
+        let path = thumbnail_path(&self.root.join(".grapes/thumbnails"), &hash);
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(GrapesError::NotFound("照片缩略图尚未生成".into()))
+        }
     }
 
     fn relocate_folder(

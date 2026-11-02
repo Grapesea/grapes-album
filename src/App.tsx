@@ -57,6 +57,7 @@ import { VirtualGallery } from "./components/VirtualGallery";
 import { PhotoWorkspace } from "./components/PhotoWorkspace";
 import { absoluteWorkspacePath } from "./utils/paths";
 import { SidebarResizer } from "./components/SidebarResizer";
+import { GraphWorkspace } from "./components/GraphWorkspace";
 
 const LEFT_SIDEBAR_MIN = 190;
 const RIGHT_SIDEBAR_MIN = 230;
@@ -85,6 +86,7 @@ export default function App() {
     "medium" | "small" | "details"
   >("medium");
   const [photoOpen, setPhotoOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
 
@@ -372,12 +374,24 @@ export default function App() {
     setSelectedFolderId(folderId);
     setSelectedAssetId(null);
     setPhotoOpen(false);
+    setGraphOpen(false);
     setFilter("");
   };
 
   const selectAsset = (asset: AssetView) => {
     setSelectedFolderId(asset.folderId);
     setSelectedAssetId(asset.id);
+    setGraphOpen(false);
+  };
+
+  const selectGraphAsset = (asset: AssetView) => {
+    setSelectedFolderId(asset.folderId);
+    setSelectedAssetId(asset.id);
+  };
+
+  const openGraphAsset = (asset: AssetView) => {
+    selectGraphAsset(asset);
+    setPhotoOpen(true);
   };
 
   const openPhoto = (asset: AssetView) => {
@@ -447,7 +461,14 @@ export default function App() {
             placeholder={t("filterPlaceholder")}
           />
         </label>
-        <button type="button" className="ghost-button graph-button" disabled>
+        <button
+          type="button"
+          className="ghost-button graph-button"
+          onClick={() => {
+            setGraphOpen(true);
+            setPhotoOpen(false);
+          }}
+        >
           <GitBranch size={15} />
           GraphSpaces
           <span>P2</span>
@@ -501,7 +522,14 @@ export default function App() {
               <FolderPlus size={16} />
             </button>
           </div>
-          <button type="button" className="graphspaces-entry">
+          <button
+            type="button"
+            className={`graphspaces-entry ${graphOpen ? "active" : ""}`}
+            onClick={() => {
+              setGraphOpen(true);
+              setPhotoOpen(false);
+            }}
+          >
             <span className="entry-orb">
               <Sparkles size={15} />
             </span>
@@ -557,7 +585,13 @@ export default function App() {
 
         <main
           ref={mainWorkspaceRef}
-          className={`main-workspace ${photoOpen && selectedAsset ? "photo-mode" : ""}`}
+          className={`main-workspace ${
+            photoOpen && selectedAsset
+              ? "photo-mode"
+              : graphOpen
+                ? "graph-mode"
+                : ""
+          }`}
         >
           {photoOpen && selectedAsset ? (
             <PhotoWorkspace
@@ -565,6 +599,19 @@ export default function App() {
               assets={currentAssets}
               onSelect={selectAsset}
               onClose={() => setPhotoOpen(false)}
+            />
+          ) : graphOpen ? (
+            <GraphWorkspace
+              assets={snapshot.assets}
+              refreshToken={
+                watcherReport?.finishedAt ??
+                snapshot.lastReconcile?.finishedAt ??
+                snapshot.workspace.createdAt
+              }
+              onClose={() => setGraphOpen(false)}
+              onSelectAsset={selectGraphAsset}
+              onOpenAsset={openGraphAsset}
+              onError={setError}
             />
           ) : (
             <>

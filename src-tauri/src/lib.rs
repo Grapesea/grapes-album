@@ -162,11 +162,12 @@ fn set_asset_tags(
 #[tauri::command]
 fn graph_catalog(state: State<'_, AppState>) -> std::result::Result<Vec<GraphInfo>, String> {
     let workspace = active_workspace(&state)?;
-    workspace
+    let catalog = workspace
         .lock()
         .map_err(|_| "工作区锁已损坏".to_owned())?
         .graph_catalog()
-        .map_err(error_string)
+        .map_err(error_string)?;
+    Ok(catalog)
 }
 
 #[tauri::command]
@@ -175,11 +176,12 @@ fn graph_view(
     graph_id: Option<String>,
 ) -> std::result::Result<GraphView, String> {
     let workspace = active_workspace(&state)?;
-    workspace
+    let view = workspace
         .lock()
         .map_err(|_| "工作区锁已损坏".to_owned())?
         .graph_view(graph_id.as_deref())
-        .map_err(error_string)
+        .map_err(error_string)?;
+    Ok(view)
 }
 
 #[tauri::command]
@@ -192,11 +194,12 @@ fn save_graph_position(
     pinned: bool,
 ) -> std::result::Result<(), String> {
     let workspace = active_workspace(&state)?;
-    workspace
+    let result = workspace
         .lock()
         .map_err(|_| "工作区锁已损坏".to_owned())?
         .save_graph_position(&graph_id, &node_key, x, y, pinned)
-        .map_err(error_string)
+        .map_err(error_string);
+    result
 }
 
 fn active_workspace(

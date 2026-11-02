@@ -633,6 +633,13 @@ body.sidebar-resizing {
   font-weight: 600;
 }
 
+.graphspaces-entry.active {
+  border-color: rgba(169, 135, 255, 0.35);
+  background:
+    radial-gradient(circle at 12% 40%, rgba(169, 135, 255, 0.2), transparent 38%),
+    rgba(169, 135, 255, 0.08);
+}
+
 .entry-orb {
   display: flex;
   width: 23px;
@@ -837,6 +844,230 @@ body.sidebar-resizing {
 .main-workspace.photo-mode {
   padding: 0;
   overflow: hidden;
+}
+
+.main-workspace.graph-mode {
+  padding: 0;
+  overflow: hidden;
+}
+
+.graph-workspace {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 52px minmax(0, 1fr) 34px;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(169, 135, 255, 0.055), transparent 38%),
+    #121015;
+}
+
+.graph-toolbar {
+  display: flex;
+  min-width: 0;
+  padding: 0 14px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(23, 19, 27, 0.88);
+}
+
+.graph-back-button {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.graph-back-button:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.graph-breadcrumbs {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+}
+
+.graph-breadcrumbs > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.graph-breadcrumbs button {
+  max-width: 150px;
+  padding: 5px 4px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-breadcrumbs button:hover,
+.graph-breadcrumbs button.current {
+  color: var(--text);
+}
+
+.graph-breadcrumb-separator {
+  margin: 0 2px;
+  color: #5f5565;
+  font-size: 9px;
+}
+
+.graph-selector {
+  display: flex;
+  height: 30px;
+  margin-left: auto;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.graph-selector select {
+  width: min(210px, 24vw);
+  height: 29px;
+  padding: 0 24px 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  background: #1c1821;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
+.graph-selector select:focus {
+  border-color: rgba(169, 135, 255, 0.4);
+}
+
+.graph-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sigma-graph-shell,
+.sigma-graph {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.sigma-graph-shell {
+  position: relative;
+}
+
+.graph-hover-card {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 5;
+  display: flex;
+  max-width: 300px;
+  padding: 10px 12px;
+  border: 1px solid rgba(169, 135, 255, 0.22);
+  border-radius: 9px;
+  background: rgba(31, 25, 37, 0.92);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+  flex-direction: column;
+  gap: 4px;
+  backdrop-filter: blur(12px);
+}
+
+.graph-hover-card strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-hover-card span,
+.graph-hover-card small {
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.graph-hover-card small {
+  color: var(--violet-light);
+}
+
+.graph-empty {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--faint);
+  text-align: center;
+}
+
+.graph-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.graph-empty p {
+  max-width: 420px;
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.graph-legend {
+  display: flex;
+  padding: 0 14px;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  background: #17131b;
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.graph-legend > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.graph-legend > span:last-child {
+  margin-left: auto;
+}
+
+.portal-dot,
+.asset-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.portal-dot {
+  background: var(--violet);
+}
+
+.asset-dot {
+  background: var(--green);
 }
 
 .photo-workspace {

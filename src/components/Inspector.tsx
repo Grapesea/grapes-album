@@ -1,13 +1,17 @@
 import type { ReactNode } from "react";
 import {
+  Aperture,
   CalendarDays,
+  Camera,
   FileType2,
   Folder,
   HardDrive,
   Image as ImageIcon,
   MapPin,
   Plus,
+  Ruler,
   Tag,
+  Timer,
   X,
 } from "lucide-react";
 import type { AssetView, FolderView } from "../bindings/types";
@@ -32,6 +36,21 @@ export function Inspector({
 }: InspectorProps) {
   const { locale, t } = useI18n();
   if (asset) {
+    const metadata = asset.metadata;
+    const cameraName = [metadata.cameraMake, metadata.cameraModel]
+      .filter(Boolean)
+      .join(" ");
+    const hasCaptureDetails = Boolean(
+      metadata.capturedAt ||
+        cameraName ||
+        metadata.lensModel ||
+        metadata.exposureTime ||
+        metadata.fNumber ||
+        metadata.iso ||
+        metadata.focalLength ||
+        metadata.gpsLat != null ||
+        (metadata.width && metadata.height),
+    );
     const addTags = async () => {
       const input = window.prompt(t("tagPrompt"));
       if (!input) return;
@@ -112,6 +131,11 @@ export function Inspector({
             value={asset.relativePath}
           />
           <InfoRow
+            icon={<FileType2 size={14} />}
+            label={t("format")}
+            value={extensionOf(asset.filename)}
+          />
+          <InfoRow
             icon={<HardDrive size={14} />}
             label={t("fileSize")}
             value={formatBytes(asset.fileSize)}
@@ -122,6 +146,74 @@ export function Inspector({
             value={formatModifiedAt(asset.mtimeNs, locale, t("unknown"))}
           />
         </InspectorSection>
+
+        {hasCaptureDetails && (
+          <InspectorSection title={t("cameraMetadata")}>
+            {cameraName && (
+              <InfoRow
+                icon={<Camera size={14} />}
+                label={t("camera")}
+                value={cameraName}
+              />
+            )}
+            {metadata.lensModel && (
+              <InfoRow
+                icon={<Camera size={14} />}
+                label={t("lens")}
+                value={metadata.lensModel}
+              />
+            )}
+            {metadata.capturedAt && (
+              <InfoRow
+                icon={<CalendarDays size={14} />}
+                label={t("capturedAt")}
+                value={metadata.capturedAt.replace("T", " ")}
+              />
+            )}
+            {metadata.width && metadata.height ? (
+              <InfoRow
+                icon={<Ruler size={14} />}
+                label={t("dimensions")}
+                value={`${metadata.width} × ${metadata.height}`}
+              />
+            ) : null}
+            {metadata.exposureTime && (
+              <InfoRow
+                icon={<Timer size={14} />}
+                label={t("exposure")}
+                value={metadata.exposureTime}
+              />
+            )}
+            {metadata.fNumber != null && (
+              <InfoRow
+                icon={<Aperture size={14} />}
+                label={t("aperture")}
+                value={`f/${metadata.fNumber}`}
+              />
+            )}
+            {metadata.iso != null && (
+              <InfoRow
+                icon={<Aperture size={14} />}
+                label={t("iso")}
+                value={`ISO ${metadata.iso}`}
+              />
+            )}
+            {metadata.focalLength != null && (
+              <InfoRow
+                icon={<Ruler size={14} />}
+                label={t("focalLength")}
+                value={`${metadata.focalLength} mm`}
+              />
+            )}
+            {metadata.gpsLat != null && metadata.gpsLon != null && (
+              <InfoRow
+                icon={<MapPin size={14} />}
+                label={t("gps")}
+                value={`${metadata.gpsLat.toFixed(5)}, ${metadata.gpsLon.toFixed(5)}`}
+              />
+            )}
+          </InspectorSection>
+        )}
 
       </aside>
     );

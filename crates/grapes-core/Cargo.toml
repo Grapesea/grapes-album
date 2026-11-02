@@ -9,6 +9,8 @@ license = "GPL-3.0-only"
 blake3 = "1.8"
 chrono = { version = "0.4", features = ["serde"] }
 file-id = "0.2.3"
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+kamadak-exif = "0.6.1"
 notify = "8.2"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

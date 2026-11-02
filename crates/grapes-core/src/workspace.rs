@@ -17,6 +17,7 @@ use crate::filesystem::{
     file_identity, hash_file, hash_to_hex, is_image_file, scan_workspace,
     validation::validate_name, ScannedAsset,
 };
+use crate::media::{extract_metadata, MediaMetadata};
 use crate::types::{AssetView, FolderView, ReconcileReport, WorkspaceSnapshot, WorkspaceView};
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -60,6 +61,8 @@ struct AssetPlan {
     created_at: String,
     is_new: bool,
     changed: bool,
+    metadata: MediaMetadata,
+    metadata_json: String,
 }
 
 impl Workspace {
@@ -178,6 +181,7 @@ impl Workspace {
                     .cloned()
                     .unwrap_or_default();
                 let relative_path = join_relative(&parent, &asset.filename);
+                let metadata = metadata_from_row(&asset);
                 AssetView {
                     id: asset.id,
                     folder_id: asset.folder_id,
@@ -188,6 +192,7 @@ impl Workspace {
                     fs_file_id: asset.fs_file_id,
                     content_hash: asset.content_hash.as_deref().map(hash_to_hex),
                     tags,
+                    metadata,
                 }
             })
             .collect::<Vec<_>>();
@@ -420,6 +425,27 @@ impl Workspace {
                 }
             }
 
+            let scan_metadata = matched
+                .map(|asset| {
+                    asset.metadata_json.is_none()
+                        || asset.file_size != scanned.file_size
+                        || asset.mtime_ns != scanned.mtime_ns
+                        || asset.content_hash.as_deref() != Some(hash.as_slice())
+                })
+                .unwrap_or(true);
+            let metadata = if scan_metadata {
+                extract_metadata(&scanned.physical_path)
+            } else {
+                matched.map(metadata_from_row).unwrap_or_default()
+            };
+            let metadata_json = if scan_metadata {
+                serde_json::to_string(&metadata)?
+            } else {
+                matched
+                    .and_then(|asset| asset.metadata_json.clone())
+                    .unwrap_or(serde_json::to_string(&metadata)?)
+            };
+
             let (id, old_path, created_at, is_new, content_changed) = match matched {
                 Some(existing) => {
                     used_assets.insert(existing.id.clone());
@@ -442,6 +468,7 @@ impl Workspace {
                         || existing.file_size != scanned.file_size
                         || existing.mtime_ns != scanned.mtime_ns
                         || existing.content_hash.as_deref() != Some(hash.as_slice())
+                        || existing.metadata_json.as_deref() != Some(metadata_json.as_str())
                 })
                 .unwrap_or(true);
 
@@ -467,6 +494,8 @@ impl Workspace {
                 created_at,
                 is_new,
                 changed,
+                metadata,
+                metadata_json,
             });
         }
 
@@ -529,6 +558,15 @@ impl Workspace {
                 fs_file_id: asset.fs_file_id.as_deref(),
                 file_size: asset.file_size,
                 mtime_ns: asset.mtime_ns,
+                width: asset.metadata.width,
+                height: asset.metadata.height,
+                captured_at: asset.metadata.captured_at.as_deref(),
+                camera_make: asset.metadata.camera_make.as_deref(),
+                camera_model: asset.metadata.camera_model.as_deref(),
+                lens_model: asset.metadata.lens_model.as_deref(),
+                gps_lat: asset.metadata.gps_lat,
+                gps_lon: asset.metadata.gps_lon,
+                metadata_json: &asset.metadata_json,
                 created_at: &asset.created_at,
             };
             if asset.is_new {
@@ -906,6 +944,24 @@ fn asset_identity_compatible(existing: &AssetRow, scanned: &ScannedAsset) -> boo
         (Some(left), Some(right)) => left == right,
         _ => true,
     }
+}
+
+fn metadata_from_row(asset: &AssetRow) -> MediaMetadata {
+    let mut metadata = asset
+        .metadata_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<MediaMetadata>(json).ok())
+        .unwrap_or_default();
+    metadata.width = asset.width;
+    metadata.height = asset.height;
+    metadata.captured_at = asset.captured_at.clone();
+    metadata.camera_make = asset.camera_make.clone();
+    metadata.camera_model = asset.camera_model.clone();
+    metadata.lens_model = asset.lens_model.clone();
+    metadata.gps_lat = asset.gps_lat;
+    metadata.gps_lon = asset.gps_lon;
+    metadata.scanned = true;
+    metadata
 }
 
 fn path_from_relative(root: &Path, relative: &str) -> PathBuf {

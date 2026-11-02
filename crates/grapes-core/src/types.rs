@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::media::MediaMetadata;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
@@ -20,7 +22,7 @@ pub struct FolderView {
     pub fs_file_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetView {
     pub id: String,
@@ -32,6 +34,7 @@ pub struct AssetView {
     pub fs_file_id: Option<String>,
     pub content_hash: Option<String>,
     pub tags: Vec<String>,
+    pub metadata: MediaMetadata,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

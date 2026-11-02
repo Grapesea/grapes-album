@@ -26,6 +26,15 @@ pub struct AssetRow {
     pub fs_file_id: Option<String>,
     pub file_size: i64,
     pub mtime_ns: i64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub captured_at: Option<String>,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub lens_model: Option<String>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub metadata_json: Option<String>,
     pub created_at: String,
 }
 
@@ -37,6 +46,15 @@ pub(crate) struct AssetWrite<'a> {
     pub fs_file_id: Option<&'a str>,
     pub file_size: i64,
     pub mtime_ns: i64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub captured_at: Option<&'a str>,
+    pub camera_make: Option<&'a str>,
+    pub camera_model: Option<&'a str>,
+    pub lens_model: Option<&'a str>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub metadata_json: &'a str,
     pub created_at: &'a str,
 }
 
@@ -124,7 +142,9 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT id, folder_id, filename, content_hash, fs_file_id,
-                        COALESCE(file_size, 0), COALESCE(mtime_ns, 0), created_at
+                        COALESCE(file_size, 0), COALESCE(mtime_ns, 0),
+                        width, height, captured_at, camera_make, camera_model,
+                        lens_model, gps_lat, gps_lon, metadata_json, created_at
                  FROM assets WHERE id = ?1",
                 [id],
                 map_asset,
@@ -288,7 +308,9 @@ pub(crate) fn load_folders(conn: &Connection) -> Result<Vec<FolderRow>> {
 pub(crate) fn load_assets(conn: &Connection) -> Result<Vec<AssetRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, folder_id, filename, content_hash, fs_file_id,
-                COALESCE(file_size, 0), COALESCE(mtime_ns, 0), created_at
+                COALESCE(file_size, 0), COALESCE(mtime_ns, 0),
+                width, height, captured_at, camera_make, camera_model,
+                lens_model, gps_lat, gps_lon, metadata_json, created_at
          FROM assets",
     )?;
     let rows = stmt
@@ -352,8 +374,12 @@ pub(crate) fn insert_asset_tx(tx: &Transaction<'_>, asset: &AssetWrite<'_>) -> R
     tx.execute(
         "INSERT INTO assets(
              id, folder_id, filename, content_hash, fs_file_id, file_size,
-             mtime_ns, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+             mtime_ns, width, height, captured_at, camera_make, camera_model,
+             lens_model, gps_lat, gps_lon, metadata_json, created_at, updated_at
+         ) VALUES (
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+             ?15, ?16, ?17, ?17
+         )",
         params![
             asset.id,
             asset.folder_id,
@@ -362,6 +388,15 @@ pub(crate) fn insert_asset_tx(tx: &Transaction<'_>, asset: &AssetWrite<'_>) -> R
             asset.fs_file_id,
             asset.file_size,
             asset.mtime_ns,
+            asset.width,
+            asset.height,
+            asset.captured_at,
+            asset.camera_make,
+            asset.camera_model,
+            asset.lens_model,
+            asset.gps_lat,
+            asset.gps_lon,
+            asset.metadata_json,
             asset.created_at
         ],
     )?;
@@ -372,7 +407,10 @@ pub(crate) fn update_asset_tx(tx: &Transaction<'_>, asset: &AssetWrite<'_>) -> R
     tx.execute(
         "UPDATE assets SET
              folder_id = ?2, filename = ?3, content_hash = ?4,
-             fs_file_id = ?5, file_size = ?6, mtime_ns = ?7, updated_at = ?8
+             fs_file_id = ?5, file_size = ?6, mtime_ns = ?7,
+             width = ?8, height = ?9, captured_at = ?10, camera_make = ?11,
+             camera_model = ?12, lens_model = ?13, gps_lat = ?14,
+             gps_lon = ?15, metadata_json = ?16, updated_at = ?17
          WHERE id = ?1",
         params![
             asset.id,
@@ -382,6 +420,15 @@ pub(crate) fn update_asset_tx(tx: &Transaction<'_>, asset: &AssetWrite<'_>) -> R
             asset.fs_file_id,
             asset.file_size,
             asset.mtime_ns,
+            asset.width,
+            asset.height,
+            asset.captured_at,
+            asset.camera_make,
+            asset.camera_model,
+            asset.lens_model,
+            asset.gps_lat,
+            asset.gps_lon,
+            asset.metadata_json,
             now()
         ],
     )?;
@@ -431,7 +478,16 @@ fn map_asset(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
         fs_file_id: row.get(4)?,
         file_size: row.get(5)?,
         mtime_ns: row.get(6)?,
-        created_at: row.get(7)?,
+        width: row.get(7)?,
+        height: row.get(8)?,
+        captured_at: row.get(9)?,
+        camera_make: row.get(10)?,
+        camera_model: row.get(11)?,
+        lens_model: row.get(12)?,
+        gps_lat: row.get(13)?,
+        gps_lon: row.get(14)?,
+        metadata_json: row.get(15)?,
+        created_at: row.get(16)?,
     })
 }
 

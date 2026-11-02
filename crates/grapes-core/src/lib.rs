@@ -1,6 +1,7 @@
 pub mod database;
 pub mod error;
 pub mod filesystem;
+pub mod media;
 pub mod types;
 pub mod watcher;
 pub mod workspace;

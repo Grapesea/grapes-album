@@ -24,6 +24,24 @@ export interface AssetView {
   fsFileId: string | null;
   contentHash: string | null;
   tags: string[];
+  metadata: PhotoMetadata;
+}
+
+export interface PhotoMetadata {
+  width: number | null;
+  height: number | null;
+  capturedAt: string | null;
+  cameraMake: string | null;
+  cameraModel: string | null;
+  lensModel: string | null;
+  gpsLat: number | null;
+  gpsLon: number | null;
+  exposureTime: string | null;
+  fNumber: number | null;
+  iso: number | null;
+  focalLength: number | null;
+  orientation: number | null;
+  scanned: boolean;
 }
 
 export interface ReconcileReport {

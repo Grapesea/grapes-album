@@ -131,6 +131,23 @@ fn tags_are_user_readable_and_survive_file_moves() {
 }
 
 #[test]
+fn exif_metadata_is_persisted_in_the_asset_snapshot() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exif.jpg");
+    fs::copy(fixture, temp.path().join("exif.jpg")).expect("copy fixture");
+
+    let workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let asset = &workspace.snapshot().expect("snapshot").assets[0];
+    assert_eq!(asset.metadata.width, Some(15));
+    assert_eq!(asset.metadata.height, Some(7));
+    assert_eq!(
+        asset.metadata.captured_at.as_deref(),
+        Some("2016-05-04T03:02:01")
+    );
+    assert!(asset.metadata.scanned);
+}
+
+#[test]
 fn startup_marks_crashed_operations_interrupted_before_reconcile() {
     let temp = tempfile::tempdir().expect("tempdir");
     write_photo(&temp.path().join("photo.jpg"), b"photo");

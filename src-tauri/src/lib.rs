@@ -294,6 +294,12 @@ pub fn run() {
         })
         .setup(|app| {
             app.manage(AppState::default());
+            if let (Some(icon), Some(window)) = (
+                app.default_window_icon().cloned(),
+                app.get_webview_window("main"),
+            ) {
+                window.set_icon(icon)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

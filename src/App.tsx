@@ -55,6 +55,7 @@ import { AssetThumbnail } from "./components/AssetThumbnail";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { useI18n } from "./i18n";
 import { VirtualGallery } from "./components/VirtualGallery";
+import { PhotoWorkspace } from "./components/PhotoWorkspace";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -67,6 +68,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [viewMode, setViewMode] = useState<"gallery" | "list">("gallery");
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
   const [watcherOnline, setWatcherOnline] = useState(false);
@@ -292,12 +294,18 @@ export default function App() {
   const selectFolder = (folderId: string) => {
     setSelectedFolderId(folderId);
     setSelectedAssetId(null);
+    setPhotoOpen(false);
     setFilter("");
   };
 
   const selectAsset = (asset: AssetView) => {
     setSelectedFolderId(asset.folderId);
     setSelectedAssetId(asset.id);
+  };
+
+  const openPhoto = (asset: AssetView) => {
+    selectAsset(asset);
+    setPhotoOpen(true);
   };
 
   if (!snapshot) {
@@ -455,7 +463,18 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="main-workspace">
+        <main
+          className={`main-workspace ${photoOpen && selectedAsset ? "photo-mode" : ""}`}
+        >
+          {photoOpen && selectedAsset ? (
+            <PhotoWorkspace
+              asset={selectedAsset}
+              assets={currentAssets}
+              onSelect={selectAsset}
+              onClose={() => setPhotoOpen(false)}
+            />
+          ) : (
+            <>
           <div className="content-toolbar">
             <nav className="breadcrumbs" aria-label={t("currentLocation")}>
               {breadcrumbs.map((folder, index) => (
@@ -617,7 +636,7 @@ export default function App() {
                 assets={currentAssets}
                 selectedAssetId={selectedAssetId}
                 onSelect={selectAsset}
-                onOpen={selectAsset}
+                onOpen={openPhoto}
               />
             ) : (
               <div className="asset-table" role="table">
@@ -637,6 +656,7 @@ export default function App() {
                     key={asset.id}
                     draggable
                     onClick={() => selectAsset(asset)}
+                    onDoubleClick={() => openPhoto(asset)}
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = "move";
                       event.dataTransfer.setData(
@@ -666,6 +686,8 @@ export default function App() {
               </div>
             )}
           </section>
+            </>
+          )}
         </main>
 
         <Inspector

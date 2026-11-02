@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { AssetView, FolderView } from "../bindings/types";
 import { useI18n } from "../i18n";
+import { Histogram } from "./Histogram";
 
 interface InspectorProps {
   asset: AssetView | null;
@@ -89,6 +90,10 @@ export function Inspector({
             <p>{asset.relativePath}</p>
           </div>
         </div>
+
+        <InspectorSection title={t("histogram")}>
+          <Histogram asset={asset} />
+        </InspectorSection>
 
         <InspectorSection title={t("tags")}>
           <div className="tag-manager">

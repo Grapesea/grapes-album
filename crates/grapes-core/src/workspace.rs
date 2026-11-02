@@ -762,6 +762,20 @@ impl Workspace {
         }
     }
 
+    pub fn asset_path(&self, asset_id: &str) -> Result<PathBuf> {
+        let asset = self.db.asset(asset_id)?;
+        let paths = self.folder_paths()?;
+        let parent = paths
+            .get(&asset.folder_id)
+            .ok_or_else(|| GrapesError::State("照片目录不可解析".into()))?;
+        let path = path_from_relative(&self.root, parent).join(asset.filename);
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(GrapesError::NotFound("照片文件不存在".into()))
+        }
+    }
+
     fn relocate_folder(
         &mut self,
         folder: FolderRow,

@@ -173,6 +173,12 @@ fn reconciliation_generates_and_reuses_thumbnail_cache() {
         .asset_thumbnail_path(&asset_id)
         .expect("thumbnail");
     assert!(thumbnail_path.is_file());
+    assert_eq!(
+        workspace
+            .asset_path(&asset_id)
+            .expect("original asset path"),
+        temp.path().join("large.jpg")
+    );
     let second_report = workspace.reconcile().expect("second reconcile");
     assert_eq!(second_report.thumbnails_created, 0);
 }

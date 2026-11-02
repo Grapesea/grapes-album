@@ -218,6 +218,61 @@ fn thumbnail_response(
             header::CACHE_CONTROL,
             "private, max-age=31536000, immutable",
         )
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(bytes)
+        .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+fn photo_response(
+    app: &AppHandle,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response, StatusCode};
+
+    let asset_id = request.uri().path().trim_matches('/');
+    let state = app.state::<AppState>();
+    let workspace = state
+        .session
+        .lock()
+        .ok()
+        .and_then(|session| session.as_ref().map(|session| session.workspace.clone()));
+    let path = workspace.and_then(|workspace| {
+        workspace
+            .lock()
+            .ok()
+            .and_then(|workspace| workspace.asset_path(asset_id).ok())
+    });
+    let Some(path) = path else {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(b"photo not found".to_vec())
+            .unwrap_or_else(|_| Response::new(b"photo not found".to_vec()));
+    };
+    let bytes = std::fs::read(&path).unwrap_or_default();
+    let content_type = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "avif" => "image/avif",
+        "heic" | "heif" => "image/heic",
+        _ => "image/jpeg",
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(
+            header::CACHE_CONTROL,
+            "private, max-age=31536000, immutable",
+        )
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(bytes)
         .unwrap_or_else(|_| Response::new(Vec::new()))
 }
@@ -228,6 +283,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("grapes-thumb", |context, request| {
             thumbnail_response(context.app_handle(), request)
+        })
+        .register_uri_scheme_protocol("grapes-photo", |context, request| {
+            photo_response(context.app_handle(), request)
         })
         .setup(|app| {
             app.manage(AppState::default());

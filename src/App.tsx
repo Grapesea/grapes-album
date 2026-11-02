@@ -568,82 +568,6 @@ export default function App() {
             </div>
           </section>
 
-          {!searchActive &&
-            childFolders.length > 0 &&
-            (folderView === "details" ? (
-              <section className="folder-details">
-                <div className="folder-details-header">
-                  <span>{t("name")}</span>
-                  <span>{t("location")}</span>
-                  <span>{t("items")}</span>
-                </div>
-                {childFolders.map((folder) => (
-                  <button
-                    type="button"
-                    key={folder.id}
-                    className="folder-details-row"
-                    onClick={() => selectFolder(folder.id)}
-                  >
-                    <span>
-                      <FolderIcon size={16} />
-                      <strong>{folder.name}</strong>
-                    </span>
-                    <span>
-                      {absoluteWorkspacePath(
-                        snapshot.workspace.rootPath,
-                        folder.relativePath,
-                      )}
-                    </span>
-                    <span>
-                      {t("photoCount", {
-                        count: countAssetsInFolder(snapshot, folder.id),
-                      })}
-                    </span>
-                  </button>
-                ))}
-              </section>
-            ) : (
-            <section
-              className={`folder-strip ${
-                folderView === "small" ? "folder-strip-small" : ""
-              }`}
-            >
-              {childFolders.map((folder) => (
-                <button
-                  type="button"
-                  key={folder.id}
-                  className="folder-card"
-                  onClick={() => selectFolder(folder.id)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const value =
-                      event.dataTransfer.getData("application/x-grapes");
-                    if (!value) return;
-                    try {
-                      handleDrop(folder.id, JSON.parse(value) as DragPayload);
-                    } catch {
-                      // Ignore malformed external data.
-                    }
-                  }}
-                >
-                  <span className="folder-card-icon">
-                    <FolderIcon size={19} />
-                  </span>
-                  <span>
-                    <strong>{folder.name}</strong>
-                    <small>
-                      {t("photoCount", {
-                        count: countAssetsInFolder(snapshot, folder.id),
-                      })}
-                    </small>
-                  </span>
-                  <ChevronRight size={15} />
-                </button>
-              ))}
-            </section>
-            ))}
-
           <section className="file-table-panel">
             <div className="table-heading">
               <div>
@@ -844,13 +768,6 @@ function Stat({
       </span>
     </div>
   );
-}
-
-function countAssetsInFolder(
-  snapshot: WorkspaceSnapshot,
-  folderId: string,
-) {
-  return snapshot.assets.filter((asset) => asset.folderId === folderId).length;
 }
 
 function formatModifiedAt(

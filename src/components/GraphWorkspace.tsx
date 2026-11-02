@@ -1,57 +1,59 @@
-import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, RefreshCw, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, LoaderCircle, RefreshCw, RotateCcw } from "lucide-react";
 import {
   getGraphCatalog,
   getGraphView,
   saveGraphPosition,
 } from "../api/workspace";
-import type {
-  AssetView,
-  GraphInfo,
-  GraphView,
-} from "../bindings/types";
+import type { AssetView, GraphInfo, GraphView } from "../bindings/types";
 import { useI18n } from "../i18n";
 import { SigmaGraph } from "../graph/SigmaGraph";
 
-const ROOT_GRAPH_ID = "graphspaces";
 type Translator = ReturnType<typeof useI18n>["t"];
 
 export function GraphWorkspace({
+  workspaceId,
   assets,
   refreshToken,
+  graphId,
+  onNavigate,
   onClose,
   onOpenAsset,
   onError,
 }: {
+  workspaceId: string;
   assets: AssetView[];
   refreshToken: string;
+  graphId: string;
+  onNavigate: (graphId: string) => void;
   onClose: () => void;
-  onOpenAsset: (asset: AssetView) => void;
+  onOpenAsset: (asset: AssetView, memberIds: string[]) => void;
   onError: (message: string) => void;
 }) {
   const { t } = useI18n();
   const [catalog, setCatalog] = useState<GraphInfo[]>([]);
   const [view, setView] = useState<GraphView | null>(null);
-  const [graphId, setGraphId] = useState(ROOT_GRAPH_ID);
   const [loading, setLoading] = useState(true);
   const [layoutNonce, setLayoutNonce] = useState(0);
+  const requestId = useRef(0);
 
   const load = useCallback(
     async (targetId: string) => {
+      const request = ++requestId.current;
       setLoading(true);
       try {
         const [nextCatalog, nextView] = await Promise.all([
           getGraphCatalog(),
           getGraphView(targetId),
         ]);
+        if (request !== requestId.current) return;
         setCatalog(nextCatalog);
         setView(nextView);
-        setGraphId(nextView.graph.id);
         setLayoutNonce(0);
       } catch (caught) {
-        onError(normalizeError(caught));
+        if (request === requestId.current) onError(normalizeError(caught));
       } finally {
-        setLoading(false);
+        if (request === requestId.current) setLoading(false);
       }
     },
     [onError],
@@ -59,16 +61,24 @@ export function GraphWorkspace({
 
   useEffect(() => {
     void load(graphId);
-  }, [graphId, load, refreshToken]);
+    return () => {
+      requestId.current += 1;
+    };
+  }, [graphId, load, refreshToken, workspaceId]);
 
   const openAssetById = (assetId: string) => {
     const asset = assets.find((item) => item.id === assetId);
-    if (asset) onOpenAsset(asset);
+    if (asset)
+      onOpenAsset(
+        asset,
+        view?.nodes.flatMap((node) => (node.assetId ? [node.assetId] : [])) ??
+          [],
+      );
   };
 
   const goBack = () => {
     const parent = view?.breadcrumbs.at(-2);
-    if (parent) setGraphId(parent.id);
+    if (parent) onNavigate(parent.id);
     else onClose();
   };
 
@@ -96,6 +106,7 @@ export function GraphWorkspace({
         );
       } catch (caught) {
         onError(normalizeError(caught));
+        throw caught;
       }
     },
     [onError, view],
@@ -117,18 +128,26 @@ export function GraphWorkspace({
           type="button"
           className="graph-back-button"
           onClick={goBack}
-          title={t("backToFiles")}
+          title={t(
+            view && view.breadcrumbs.length > 1 ? "graphBack" : "backToFiles",
+          )}
+          aria-label={t(
+            view && view.breadcrumbs.length > 1 ? "graphBack" : "backToFiles",
+          )}
         >
           <ArrowLeft size={16} />
         </button>
         <nav className="graph-breadcrumbs" aria-label={t("graphBreadcrumb")}>
           {view?.breadcrumbs.map((graph, index) => (
             <span key={graph.id}>
-              {index > 0 && <span className="graph-breadcrumb-separator">/</span>}
+              {index > 0 && (
+                <span className="graph-breadcrumb-separator">/</span>
+              )}
               <button
                 type="button"
                 className={graph.id === graphId ? "current" : ""}
-                onClick={() => setGraphId(graph.id)}
+                onClick={() => onNavigate(graph.id)}
+                aria-current={graph.id === graphId ? "page" : undefined}
               >
                 {graphLabel(graph, catalog, t)}
               </button>
@@ -139,7 +158,7 @@ export function GraphWorkspace({
           <span>{t("graph")}</span>
           <select
             value={graphId}
-            onChange={(event) => setGraphId(event.target.value)}
+            onChange={(event) => onNavigate(event.target.value)}
           >
             {catalog.map((graph) => (
               <option key={graph.id} value={graph.id}>
@@ -159,15 +178,39 @@ export function GraphWorkspace({
         </button>
       </header>
 
-      <div className="graph-stage">
-        {view && view.nodes.length > 0 ? (
-          <SigmaGraph
-            view={view}
-            layoutNonce={layoutNonce}
-            onNavigate={setGraphId}
-            onOpenAsset={openAssetById}
-            onSavePositions={savePositions}
-          />
+      <div className="graph-stage" aria-busy={loading}>
+        {loading ? (
+          <div className="graph-loading" role="status">
+            <LoaderCircle size={18} className="spin" />
+            {t("graphLoading")}
+          </div>
+        ) : view && view.graph.id === graphId ? (
+          <>
+            <div className="graph-stage-heading">
+              <strong>{graphLabel(view.graph, catalog, t)}</strong>
+              <span>
+                {t("graphNodeCount", {
+                  count: view.nodes.filter((node) => !node.dummy).length,
+                })}{" "}
+                · {t("photoCount", { count: view.graph.photoCount })}
+              </span>
+            </div>
+            <SigmaGraph
+              key={`${workspaceId}:${view.graph.id}`}
+              workspaceId={workspaceId}
+              view={view}
+              layoutNonce={layoutNonce}
+              onNavigate={onNavigate}
+              onOpenAsset={openAssetById}
+              onSavePositions={savePositions}
+            />
+            {!view.nodes.some((node) => !node.dummy) && (
+              <div className="graph-empty graph-empty-overlay">
+                <strong>{t("graphEmpty")}</strong>
+                <p>{t("graphEmptyHint")}</p>
+              </div>
+            )}
+          </>
         ) : (
           <div className="graph-empty">
             <strong>{t("graphEmpty")}</strong>
@@ -177,21 +220,29 @@ export function GraphWorkspace({
       </div>
 
       <footer className="graph-legend">
-        <span><i className="portal-dot" />{t("portalNode")}</span>
-        <span><i className="asset-dot" />{t("photoNode")}</span>
+        <span>
+          <i className="dummy-dot" />
+          {t("graphRoot")}
+        </span>
+        <span>
+          <i className="portal-dot" />
+          {t("portalNode")}
+        </span>
+        <span>
+          <i className="asset-dot" />
+          {t("photoNode")}
+        </span>
         <span>{t("graphHint")}</span>
       </footer>
     </section>
   );
 }
 
-function graphLabel(
-  graph: GraphInfo,
-  catalog: GraphInfo[],
-  t: Translator,
-) {
+function graphLabel(graph: GraphInfo, catalog: GraphInfo[], t: Translator) {
   if (graph.kind === "root") return "GraphSpaces";
-  const dimension = graph.dimension ? dimensionLabel(graph.dimension, t) : graph.name;
+  const dimension = graph.dimension
+    ? dimensionLabel(graph.dimension, t)
+    : graph.name;
   if (graph.kind === "value") {
     const parent = catalog.find((item) => item.id === graph.parentId);
     return `${parent?.dimension ? dimensionLabel(parent.dimension, t) : dimension} · ${graph.name}`;
@@ -199,10 +250,7 @@ function graphLabel(
   return dimension;
 }
 
-export function dimensionLabel(
-  dimension: string,
-  t: Translator,
-) {
+export function dimensionLabel(dimension: string, t: Translator) {
   const keys = {
     date: "dimensionDate",
     time: "dimensionTime",

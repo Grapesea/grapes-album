@@ -93,8 +93,15 @@ export default function App() {
   >("medium");
   const [photoOpen, setPhotoOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [graphId, setGraphId] = useState("graphspaces");
+  const [graphPhotoIds, setGraphPhotoIds] = useState<string[]>([]);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
+
+  useEffect(() => {
+    setGraphId("graphspaces");
+    setGraphPhotoIds([]);
+  }, [snapshot?.workspace.id]);
 
   const workspaceWidth = () =>
     workspaceRef.current?.clientWidth ?? window.innerWidth;
@@ -395,7 +402,8 @@ export default function App() {
     setSelectedAssetId(asset.id);
   };
 
-  const openGraphAsset = (asset: AssetView) => {
+  const openGraphAsset = (asset: AssetView, memberIds: string[]) => {
+    setGraphPhotoIds(memberIds);
     selectGraphAsset(asset);
     setPhotoOpen(true);
   };
@@ -602,8 +610,11 @@ export default function App() {
           {photoOpen && selectedAsset ? (
             <PhotoWorkspace
               asset={selectedAsset}
-              assets={currentAssets}
-              onSelect={selectAsset}
+              assets={graphOpen ? graphPhotoIds.flatMap((id) => {
+                const asset = snapshot.assets.find((item) => item.id === id);
+                return asset ? [asset] : [];
+              }) : currentAssets}
+              onSelect={graphOpen ? selectGraphAsset : selectAsset}
               onClose={() => setPhotoOpen(false)}
             />
           ) : graphOpen ? (
@@ -616,6 +627,9 @@ export default function App() {
               }
             >
               <GraphWorkspace
+                graphId={graphId}
+                onNavigate={setGraphId}
+                workspaceId={snapshot.workspace.id}
                 assets={snapshot.assets}
                 refreshToken={
                   watcherReport?.finishedAt ??

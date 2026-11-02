@@ -8,5 +8,7 @@ crates/*/target/
 .DS_Store
 .cache/
 nul
-README.md
+/README.md
 src-tauri/gen/schemas/
+ref/
+tests/

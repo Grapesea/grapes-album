@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:graph": "node --experimental-strip-types --test tests/grape-layout.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "check:core": "cargo test --manifest-path crates/grapes-core/Cargo.toml"

@@ -68,6 +68,9 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [viewMode, setViewMode] = useState<"gallery" | "list">("gallery");
+  const [folderView, setFolderView] = useState<
+    "medium" | "small" | "details"
+  >("medium");
   const [photoOpen, setPhotoOpen] = useState(false);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
@@ -498,6 +501,24 @@ export default function App() {
               ))}
             </nav>
             <div className="content-actions">
+              <label
+                className="folder-view-control"
+                title={t("folderView")}
+              >
+                <select
+                  aria-label={t("folderView")}
+                  value={folderView}
+                  onChange={(event) =>
+                    setFolderView(
+                      event.target.value as "medium" | "small" | "details",
+                    )
+                  }
+                >
+                  <option value="medium">{t("mediumIcons")}</option>
+                  <option value="small">{t("smallIcons")}</option>
+                  <option value="details">{t("details")}</option>
+                </select>
+              </label>
               <button
                 type="button"
                 className="secondary-button"
@@ -567,8 +588,41 @@ export default function App() {
             </div>
           </section>
 
-          {!searchActive && childFolders.length > 0 && (
-            <section className="folder-strip">
+          {!searchActive &&
+            childFolders.length > 0 &&
+            (folderView === "details" ? (
+              <section className="folder-details">
+                <div className="folder-details-header">
+                  <span>{t("name")}</span>
+                  <span>{t("location")}</span>
+                  <span>{t("items")}</span>
+                </div>
+                {childFolders.map((folder) => (
+                  <button
+                    type="button"
+                    key={folder.id}
+                    className="folder-details-row"
+                    onClick={() => selectFolder(folder.id)}
+                  >
+                    <span>
+                      <FolderIcon size={16} />
+                      <strong>{folder.name}</strong>
+                    </span>
+                    <span>{folder.relativePath}</span>
+                    <span>
+                      {t("photoCount", {
+                        count: countAssetsInFolder(snapshot, folder.id),
+                      })}
+                    </span>
+                  </button>
+                ))}
+              </section>
+            ) : (
+            <section
+              className={`folder-strip ${
+                folderView === "small" ? "folder-strip-small" : ""
+              }`}
+            >
               {childFolders.map((folder) => (
                 <button
                   type="button"
@@ -603,7 +657,7 @@ export default function App() {
                 </button>
               ))}
             </section>
-          )}
+            ))}
 
           <section className="file-table-panel">
             <div className="table-heading">

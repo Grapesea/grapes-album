@@ -78,7 +78,6 @@ export function Inspector({
       <aside className="inspector">
         <div className="inspector-header">
           <div>
-            <span className="eyebrow">{t("inspector")}</span>
             <h2>{t("photoProperties")}</h2>
           </div>
         </div>
@@ -232,7 +231,6 @@ export function Inspector({
       <aside className="inspector">
         <div className="inspector-header">
           <div>
-            <span className="eyebrow">{t("inspector")}</span>
             <h2>{t("folder")}</h2>
           </div>
         </div>

@@ -22,7 +22,6 @@ interface SigmaGraphProps {
   view: GraphView;
   layoutNonce: number;
   onNavigate: (graphId: string) => void;
-  onSelectAsset: (assetId: string) => void;
   onOpenAsset: (assetId: string) => void;
   onSavePositions: (positions: SavedPosition[]) => Promise<void>;
 }
@@ -31,7 +30,6 @@ export function SigmaGraph({
   view,
   layoutNonce,
   onNavigate,
-  onSelectAsset,
   onOpenAsset,
   onSavePositions,
 }: SigmaGraphProps) {
@@ -99,6 +97,14 @@ export function SigmaGraph({
           nodeReducer: (node, attributes) => {
             const data = view.nodes.find((item) => item.id === node);
             if (!data) return attributes;
+            if (data.dummy) {
+              return {
+                ...attributes,
+                color: "#51475b",
+                size: 2,
+                label: "",
+              };
+            }
             if (!data.available) {
               return {
                 ...attributes,
@@ -149,7 +155,6 @@ export function SigmaGraph({
           layoutNonce={layoutNonce}
           onHover={setHovered}
           onNavigate={onNavigate}
-          onSelectAsset={onSelectAsset}
           onOpenAsset={onOpenAsset}
           onSavePositions={onSavePositions}
         />
@@ -187,7 +192,6 @@ function GraphEvents({
   layoutNonce,
   onHover,
   onNavigate,
-  onSelectAsset,
   onOpenAsset,
   onSavePositions,
 }: SigmaGraphProps & {
@@ -235,15 +239,17 @@ function GraphEvents({
   useEffect(() => {
     registerEvents({
       enterNode: ({ node }) => {
-        onHover(view.nodes.find((item) => item.id === node) ?? null);
+        const selected = view.nodes.find((item) => item.id === node);
+        onHover(selected?.dummy ? null : selected ?? null);
       },
       leaveNode: () => onHover(null),
       clickNode: ({ node }) => {
         const selected = view.nodes.find((item) => item.id === node);
+        if (selected?.dummy) return;
         if (selected?.kind === "portal" && selected.targetGraphId) {
           onNavigate(selected.targetGraphId);
         } else if (selected?.kind === "asset" && selected.assetId) {
-          onSelectAsset(selected.assetId);
+          onOpenAsset(selected.assetId);
         }
       },
       doubleClickNode: ({ node }) => {
@@ -271,7 +277,6 @@ function GraphEvents({
     onNavigate,
     onOpenAsset,
     onSavePositions,
-    onSelectAsset,
     registerEvents,
     view,
   ]);
@@ -336,7 +341,8 @@ function createGraphologyGraph(
             : 10,
       color: node.available ? "#aa8aff" : "#5d5563",
       nodeKind: node.kind,
-      fixed: node.pinned,
+      dummy: node.dummy,
+      fixed: node.pinned || node.dummy,
     });
   }
 

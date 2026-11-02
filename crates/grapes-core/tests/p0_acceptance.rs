@@ -238,6 +238,13 @@ fn graphspaces_build_automatic_metadata_graphs_and_persist_positions() {
         .any(|graph| graph.name == "Sony ZV-E10" && graph.photo_count == 1));
 
     let root = workspace.graph_view(None).expect("root graph");
+    let root_dummy = root
+        .nodes
+        .iter()
+        .find(|node| node.id == "portal:graphspaces")
+        .expect("root dummy");
+    assert!(root_dummy.dummy);
+    assert!(root_dummy.target_graph_id.is_none());
     for dimension in ["date", "camera", "lens"] {
         let node = root
             .nodes
@@ -255,6 +262,7 @@ fn graphspaces_build_automatic_metadata_graphs_and_persist_positions() {
     let date_view = workspace
         .graph_view(Some(&date_graph.id))
         .expect("date view");
+    assert!(date_view.nodes.first().expect("date dummy").dummy);
     assert_eq!(
         date_view.breadcrumbs.last().map(|graph| graph.id.as_str()),
         Some("graph:dimension:date")
@@ -273,6 +281,7 @@ fn graphspaces_build_automatic_metadata_graphs_and_persist_positions() {
         .expect("month view");
     assert!(month_view.nodes.iter().any(|node| {
         node.kind == GraphNodeKind::Asset
+            && !node.dummy
             && node.asset_id.as_deref() == Some(initial.assets[0].id.as_str())
     }));
 

@@ -623,7 +623,6 @@ export default function App() {
                   snapshot.workspace.createdAt
                 }
                 onClose={() => setGraphOpen(false)}
-                onSelectAsset={selectGraphAsset}
                 onOpenAsset={openGraphAsset}
                 onError={setError}
               />

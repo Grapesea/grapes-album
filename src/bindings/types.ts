@@ -74,6 +74,7 @@ export interface GraphInfo {
 export interface GraphNode {
   id: string;
   kind: "portal" | "asset";
+  dummy: boolean;
   label: string;
   subtitle: string | null;
   targetGraphId: string | null;

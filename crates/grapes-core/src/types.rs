@@ -102,6 +102,7 @@ pub enum GraphNodeKind {
 pub struct GraphNode {
     pub id: String,
     pub kind: GraphNodeKind,
+    pub dummy: bool,
     pub label: String,
     pub subtitle: Option<String>,
     pub target_graph_id: Option<String>,

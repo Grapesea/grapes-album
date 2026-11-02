@@ -20,14 +20,12 @@ export function GraphWorkspace({
   assets,
   refreshToken,
   onClose,
-  onSelectAsset,
   onOpenAsset,
   onError,
 }: {
   assets: AssetView[];
   refreshToken: string;
   onClose: () => void;
-  onSelectAsset: (asset: AssetView) => void;
   onOpenAsset: (asset: AssetView) => void;
   onError: (message: string) => void;
 }) {
@@ -62,11 +60,6 @@ export function GraphWorkspace({
   useEffect(() => {
     void load(graphId);
   }, [graphId, load, refreshToken]);
-
-  const selectAssetById = (assetId: string) => {
-    const asset = assets.find((item) => item.id === assetId);
-    if (asset) onSelectAsset(asset);
-  };
 
   const openAssetById = (assetId: string) => {
     const asset = assets.find((item) => item.id === assetId);
@@ -172,7 +165,6 @@ export function GraphWorkspace({
             view={view}
             layoutNonce={layoutNonce}
             onNavigate={setGraphId}
-            onSelectAsset={selectAssetById}
             onOpenAsset={openAssetById}
             onSavePositions={savePositions}
           />

@@ -66,6 +66,7 @@ struct Position {
 struct GraphNodeSpec<'a> {
     id: &'a str,
     kind: GraphNodeKind,
+    dummy: bool,
     label: &'a str,
     subtitle: Option<String>,
     target_graph_id: Option<&'a str>,
@@ -184,6 +185,7 @@ pub fn build_graph_view(
                 GraphNodeSpec {
                     id: &center_id,
                     kind: GraphNodeKind::Portal,
+                    dummy: true,
                     label: "GraphSpaces",
                     subtitle: Some(format!("{} photos", snapshot.assets.len())),
                     target_graph_id: None,
@@ -203,6 +205,7 @@ pub fn build_graph_view(
                     GraphNodeSpec {
                         id: &id,
                         kind: GraphNodeKind::Portal,
+                        dummy: false,
                         label: dimension.label,
                         subtitle: target
                             .map(|_| format!("{} photos", graph_count(&catalog, target))),
@@ -227,6 +230,7 @@ pub fn build_graph_view(
                 GraphNodeSpec {
                     id: &center_id,
                     kind: GraphNodeKind::Portal,
+                    dummy: true,
                     label: dimension.label,
                     subtitle: Some(format!("{} photos", graph.photo_count)),
                     target_graph_id: None,
@@ -249,6 +253,7 @@ pub fn build_graph_view(
                     GraphNodeSpec {
                         id: &id,
                         kind: GraphNodeKind::Portal,
+                        dummy: false,
                         label: &value.label,
                         subtitle: Some(format!("{} photos", value.asset_ids.len())),
                         target_graph_id: Some(&value_graph.id),
@@ -275,6 +280,7 @@ pub fn build_graph_view(
                 GraphNodeSpec {
                     id: &center_id,
                     kind: GraphNodeKind::Portal,
+                    dummy: true,
                     label: &graph.name,
                     subtitle: Some(format!("{} photos", value.asset_ids.len())),
                     target_graph_id: None,
@@ -293,6 +299,7 @@ pub fn build_graph_view(
                     GraphNodeSpec {
                         id: &id,
                         kind: GraphNodeKind::Asset,
+                        dummy: false,
                         label: &asset.filename,
                         subtitle: asset_subtitle(asset),
                         target_graph_id: None,
@@ -493,6 +500,7 @@ fn graph_node(spec: GraphNodeSpec<'_>, position: Option<&Position>) -> GraphNode
     GraphNode {
         id: spec.id.into(),
         kind: spec.kind,
+        dummy: spec.dummy,
         label: spec.label.into(),
         subtitle: spec.subtitle,
         target_graph_id: spec.target_graph_id.map(str::to_owned),

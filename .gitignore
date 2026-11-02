@@ -7,6 +7,6 @@ crates/*/target/
 *.log
 .DS_Store
 .cache/
-.cache/
 nul
 README.md
+src-tauri/gen/schemas/

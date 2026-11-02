@@ -17,9 +17,12 @@ use crate::filesystem::{
     file_identity, hash_file, hash_to_hex, is_image_file, scan_workspace,
     validation::validate_name, ScannedAsset,
 };
+use crate::graph;
 use crate::media::thumbnail::thumbnail_path;
 use crate::media::{ensure_thumbnail, extract_metadata, MediaMetadata, ThumbnailResult};
-use crate::types::{AssetView, FolderView, ReconcileReport, WorkspaceSnapshot, WorkspaceView};
+use crate::types::{
+    AssetView, FolderView, GraphInfo, GraphView, ReconcileReport, WorkspaceSnapshot, WorkspaceView,
+};
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 
@@ -774,6 +777,27 @@ impl Workspace {
         } else {
             Err(GrapesError::NotFound("照片文件不存在".into()))
         }
+    }
+
+    pub fn graph_catalog(&self) -> Result<Vec<GraphInfo>> {
+        let snapshot = self.snapshot()?;
+        graph::graph_catalog(&snapshot, &self.db.conn)
+    }
+
+    pub fn graph_view(&self, graph_id: Option<&str>) -> Result<GraphView> {
+        let snapshot = self.snapshot()?;
+        graph::build_graph_view(&snapshot, &self.db.conn, graph_id)
+    }
+
+    pub fn save_graph_position(
+        &self,
+        graph_id: &str,
+        node_key: &str,
+        x: f64,
+        y: f64,
+        pinned: bool,
+    ) -> Result<()> {
+        graph::save_position(&self.db.conn, graph_id, node_key, x, y, pinned)
     }
 
     fn relocate_folder(

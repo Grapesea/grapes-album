@@ -60,6 +60,44 @@ export interface ReconcileReport {
   warnings: string[];
 }
 
+export interface GraphInfo {
+  id: string;
+  parentId: string | null;
+  name: string;
+  kind: "root" | "dimension" | "value";
+  dimension: string | null;
+  dimensionValue: string | null;
+  photoCount: number;
+  childCount: number;
+}
+
+export interface GraphNode {
+  id: string;
+  kind: "portal" | "asset";
+  label: string;
+  subtitle: string | null;
+  targetGraphId: string | null;
+  assetId: string | null;
+  photoCount: number;
+  available: boolean;
+  x: number | null;
+  y: number | null;
+  pinned: boolean;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+}
+
+export interface GraphView {
+  graph: GraphInfo;
+  breadcrumbs: GraphInfo[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 export interface WorkspaceSnapshot {
   workspace: WorkspaceView;
   folders: FolderView[];

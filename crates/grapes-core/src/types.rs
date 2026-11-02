@@ -76,3 +76,56 @@ pub struct WorkspaceSnapshot {
     pub root_folder_id: String,
     pub last_reconcile: Option<ReconcileReport>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphInfo {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub kind: String,
+    pub dimension: Option<String>,
+    pub dimension_value: Option<String>,
+    pub photo_count: usize,
+    pub child_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphNodeKind {
+    Portal,
+    Asset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    pub id: String,
+    pub kind: GraphNodeKind,
+    pub label: String,
+    pub subtitle: Option<String>,
+    pub target_graph_id: Option<String>,
+    pub asset_id: Option<String>,
+    pub photo_count: usize,
+    pub available: bool,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub id: String,
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphView {
+    pub graph: GraphInfo,
+    pub breadcrumbs: Vec<GraphInfo>,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}

@@ -1,6 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { WorkspaceSnapshot } from "../bindings/types";
+import type {
+  GraphInfo,
+  GraphView,
+  WorkspaceSnapshot,
+} from "../bindings/types";
 
 export const desktopRuntime = isTauri();
 
@@ -65,4 +69,28 @@ export function setAssetTags(
   tags: string[],
 ): Promise<WorkspaceSnapshot> {
   return invoke("set_asset_tags", { assetId, tags });
+}
+
+export function getGraphCatalog(): Promise<GraphInfo[]> {
+  return invoke("graph_catalog");
+}
+
+export function getGraphView(graphId?: string): Promise<GraphView> {
+  return invoke("graph_view", { graphId: graphId ?? null });
+}
+
+export function saveGraphPosition(
+  graphId: string,
+  nodeKey: string,
+  x: number,
+  y: number,
+  pinned: boolean,
+): Promise<void> {
+  return invoke("save_graph_position", {
+    graphId,
+    nodeKey,
+    x,
+    y,
+    pinned,
+  });
 }

@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use grapes_core::{Workspace, WorkspaceSnapshot, WorkspaceWatcher};
+use grapes_core::{GraphInfo, GraphView, Workspace, WorkspaceSnapshot, WorkspaceWatcher};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct Session {
@@ -159,6 +159,46 @@ fn set_asset_tags(
     read_snapshot(&workspace)
 }
 
+#[tauri::command]
+fn graph_catalog(state: State<'_, AppState>) -> std::result::Result<Vec<GraphInfo>, String> {
+    let workspace = active_workspace(&state)?;
+    workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .graph_catalog()
+        .map_err(error_string)
+}
+
+#[tauri::command]
+fn graph_view(
+    state: State<'_, AppState>,
+    graph_id: Option<String>,
+) -> std::result::Result<GraphView, String> {
+    let workspace = active_workspace(&state)?;
+    workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .graph_view(graph_id.as_deref())
+        .map_err(error_string)
+}
+
+#[tauri::command]
+fn save_graph_position(
+    state: State<'_, AppState>,
+    graph_id: String,
+    node_key: String,
+    x: f64,
+    y: f64,
+    pinned: bool,
+) -> std::result::Result<(), String> {
+    let workspace = active_workspace(&state)?;
+    workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .save_graph_position(&graph_id, &node_key, x, y, pinned)
+        .map_err(error_string)
+}
+
 fn active_workspace(
     state: &State<'_, AppState>,
 ) -> std::result::Result<Arc<Mutex<Workspace>>, String> {
@@ -311,7 +351,10 @@ pub fn run() {
             rename_folder,
             move_asset,
             rename_asset,
-            set_asset_tags
+            set_asset_tags,
+            graph_catalog,
+            graph_view,
+            save_graph_position
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grapes");

@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::error::{GrapesError, Result};
 
-pub const DATABASE_SCHEMA_VERSION: i64 = 3;
+pub const DATABASE_SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Clone)]
 pub struct FolderRow {
@@ -271,6 +271,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         (1, include_str!("migrations/001_core.sql")),
         (2, include_str!("migrations/002_operations.sql")),
         (3, include_str!("migrations/003_asset_tags.sql")),
+        (4, include_str!("migrations/004_graphspaces.sql")),
     ];
 
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;

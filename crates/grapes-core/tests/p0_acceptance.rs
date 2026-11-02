@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use grapes_core::Workspace;
+use grapes_core::{GraphNodeKind, Workspace};
 use rusqlite::Connection;
 
 fn write_photo(path: &Path, contents: &[u8]) {
@@ -35,13 +35,13 @@ fn initializes_sidecar_and_database_migrations() {
     )
     .expect("manifest json");
     assert_eq!(manifest["schemaVersion"], 1);
-    assert_eq!(snapshot.workspace.schema_version, 3);
+    assert_eq!(snapshot.workspace.schema_version, 4);
 
     let connection = Connection::open(temp.path().join(".grapes/grapes.db")).expect("database");
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let table_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
@@ -77,7 +77,7 @@ fn upgrades_an_existing_v1_database_in_place() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        3
+        4
     );
     let connection = Connection::open(database_path).expect("database");
     let operations_table: i64 = connection
@@ -181,6 +181,135 @@ fn reconciliation_generates_and_reuses_thumbnail_cache() {
     );
     let second_report = workspace.reconcile().expect("second reconcile");
     assert_eq!(second_report.thumbnails_created, 0);
+}
+
+#[test]
+fn graphspaces_build_automatic_metadata_graphs_and_persist_positions() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_photo(&temp.path().join("Inbox/one.jpg"), b"one");
+    write_photo(&temp.path().join("Inbox/two.jpg"), b"two");
+    fs::create_dir(temp.path().join("Archive")).expect("archive");
+
+    let mut workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let initial = workspace.snapshot().expect("snapshot");
+    {
+        let connection = Connection::open(temp.path().join(".grapes/grapes.db")).expect("database");
+        connection
+            .execute(
+                "UPDATE assets SET
+                    captured_at = '2026-07-21T20:30:00',
+                    camera_model = 'Sony ZV-E10',
+                    lens_model = 'Sigma 18-50'
+                 WHERE id = ?1",
+                [&initial.assets[0].id],
+            )
+            .expect("metadata one");
+        connection
+            .execute(
+                "UPDATE assets SET
+                    captured_at = '2026-08-02T09:00:00',
+                    camera_model = 'Fujifilm X-T5',
+                    lens_model = 'XF 33mm'
+                 WHERE id = ?1",
+                [&initial.assets[1].id],
+            )
+            .expect("metadata two");
+    }
+
+    let catalog = workspace.graph_catalog().expect("catalog");
+    assert!(catalog.iter().any(|graph| graph.id == "graphspaces"));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.kind == "dimension" && graph.dimension.as_deref() == Some("date")));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.kind == "dimension" && graph.dimension.as_deref() == Some("camera")));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.kind == "dimension" && graph.dimension.as_deref() == Some("lens")));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.name == "2026-07" && graph.photo_count == 1));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.name == "Sony ZV-E10" && graph.photo_count == 1));
+
+    let root = workspace.graph_view(None).expect("root graph");
+    for dimension in ["date", "camera", "lens"] {
+        let node = root
+            .nodes
+            .iter()
+            .find(|node| node.id == format!("portal:{dimension}"))
+            .expect("dimension portal");
+        assert!(node.available);
+        assert!(node.target_graph_id.is_some());
+    }
+
+    let date_graph = catalog
+        .iter()
+        .find(|graph| graph.id == "graph:dimension:date")
+        .expect("date graph");
+    let date_view = workspace
+        .graph_view(Some(&date_graph.id))
+        .expect("date view");
+    assert_eq!(
+        date_view.breadcrumbs.last().map(|graph| graph.id.as_str()),
+        Some("graph:dimension:date")
+    );
+    assert!(date_view
+        .nodes
+        .iter()
+        .any(|node| node.label == "2026-07" && node.target_graph_id.is_some()));
+
+    let month_graph = catalog
+        .iter()
+        .find(|graph| graph.name == "2026-07")
+        .expect("month graph");
+    let month_view = workspace
+        .graph_view(Some(&month_graph.id))
+        .expect("month view");
+    assert!(month_view.nodes.iter().any(|node| {
+        node.kind == GraphNodeKind::Asset
+            && node.asset_id.as_deref() == Some(initial.assets[0].id.as_str())
+    }));
+
+    let asset_node = month_view
+        .nodes
+        .iter()
+        .find(|node| node.kind == GraphNodeKind::Asset)
+        .expect("asset node");
+    workspace
+        .save_graph_position(&month_graph.id, &asset_node.id, 120.5, -48.0, true)
+        .expect("save position");
+    let restored = workspace
+        .graph_view(Some(&month_graph.id))
+        .expect("restored view");
+    let restored_node = restored
+        .nodes
+        .iter()
+        .find(|node| node.id == asset_node.id)
+        .expect("restored node");
+    assert_eq!(restored_node.x, Some(120.5));
+    assert_eq!(restored_node.y, Some(-48.0));
+    assert!(restored_node.pinned);
+
+    let archive_id = initial
+        .folders
+        .iter()
+        .find(|folder| folder.name == "Archive")
+        .expect("archive")
+        .id
+        .clone();
+    workspace
+        .move_asset(&initial.assets[0].id, &archive_id)
+        .expect("move asset");
+    let after_move = workspace
+        .graph_view(Some(&month_graph.id))
+        .expect("graph after move");
+    assert!(after_move.nodes.iter().any(|node| {
+        node.kind == GraphNodeKind::Asset
+            && node.asset_id.as_deref() == Some(initial.assets[0].id.as_str())
+    }));
 }
 
 #[test]

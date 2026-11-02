@@ -1,42 +1,40 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
-use crate::database::now;
+use crate::database::{load_dimensions, now};
 use crate::error::{GrapesError, Result};
 use crate::types::{
-    AssetView, GraphEdge, GraphInfo, GraphNode, GraphNodeKind, GraphView, WorkspaceSnapshot,
+    AssetView, GraphEdge, GraphInfo, GraphNode, GraphNodeKind, GraphView, SmartGraphFilter,
+    WorkspaceSnapshot,
 };
 
 pub const GRAPHSPACES_ID: &str = "graphspaces";
 const DATE_ID: &str = "graph:dimension:date";
 const CAMERA_ID: &str = "graph:dimension:camera";
 const LENS_ID: &str = "graph:dimension:lens";
+const TAGS_ID: &str = "graph:dimension:tags";
 
-#[derive(Debug, Clone, Copy)]
-struct DimensionSpec {
-    key: &'static str,
-    id: &'static str,
-    label: &'static str,
+#[derive(Debug, Clone)]
+struct DimensionGraph {
+    key: String,
+    id: String,
+    label: String,
+    values: Vec<ValueGroup>,
 }
 
-const DIMENSIONS: &[DimensionSpec] = &[
-    DimensionSpec {
-        key: "date",
-        id: DATE_ID,
-        label: "Date",
-    },
-    DimensionSpec {
-        key: "camera",
-        id: CAMERA_ID,
-        label: "Camera",
-    },
-    DimensionSpec {
-        key: "lens",
-        id: LENS_ID,
-        label: "Lens",
-    },
-];
+#[derive(Debug, Clone)]
+struct SmartGraphRow {
+    id: String,
+    name: String,
+    filters: Vec<SmartGraphFilter>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SmartGraphQuery {
+    all: Vec<SmartGraphFilter>,
+}
 
 #[derive(Debug, Clone)]
 struct ValueGroup {
@@ -76,7 +74,16 @@ struct GraphNodeSpec<'a> {
 }
 
 pub fn graph_catalog(snapshot: &WorkspaceSnapshot, conn: &Connection) -> Result<Vec<GraphInfo>> {
-    let grouped = grouped_dimensions(snapshot);
+    let dimensions = grouped_dimensions(snapshot, conn)?;
+    let smart_graphs = load_smart_graphs(snapshot, conn)?;
+    let tag_dimension = dimensions
+        .iter()
+        .find(|dimension| dimension.key == "tags")
+        .expect("tag dimension is always generated");
+    let root_dimension_count = dimensions
+        .iter()
+        .filter(|dimension| is_root_dimension(dimension))
+        .count();
     let mut catalog = Vec::new();
     catalog.push(GraphInfo {
         id: GRAPHSPACES_ID.into(),
@@ -86,7 +93,7 @@ pub fn graph_catalog(snapshot: &WorkspaceSnapshot, conn: &Connection) -> Result<
         dimension: None,
         dimension_value: None,
         photo_count: snapshot.assets.len(),
-        child_count: 9,
+        child_count: root_dimension_count + tag_dimension.values.len() + smart_graphs.len(),
     });
     ensure_graph(
         conn,
@@ -100,41 +107,44 @@ pub fn graph_catalog(snapshot: &WorkspaceSnapshot, conn: &Connection) -> Result<
         },
     )?;
 
-    for dimension in DIMENSIONS {
-        let values = grouped.get(dimension.key).cloned().unwrap_or_default();
-        let photo_ids = values
+    for dimension in dimensions
+        .iter()
+        .filter(|dimension| dimension.key != "tags")
+    {
+        let photo_ids = dimension
+            .values
             .iter()
             .flat_map(|value| value.asset_ids.iter())
             .collect::<HashSet<_>>();
         catalog.push(GraphInfo {
-            id: dimension.id.into(),
+            id: dimension.id.clone(),
             parent_id: Some(GRAPHSPACES_ID.into()),
-            name: dimension.label.into(),
+            name: dimension.label.clone(),
             kind: "dimension".into(),
-            dimension: Some(dimension.key.into()),
+            dimension: Some(dimension.key.clone()),
             dimension_value: None,
             photo_count: photo_ids.len(),
-            child_count: values.len(),
+            child_count: dimension.values.len(),
         });
         ensure_graph(
             conn,
             &GraphDefinition {
-                id: dimension.id.into(),
+                id: dimension.id.clone(),
                 parent_id: Some(GRAPHSPACES_ID.into()),
-                name: dimension.label.into(),
+                name: dimension.label.clone(),
                 kind: "dimension",
-                dimension: Some(dimension.key.into()),
+                dimension: Some(dimension.key.clone()),
                 dimension_value: None,
             },
         )?;
 
-        for value in values {
+        for value in &dimension.values {
             catalog.push(GraphInfo {
                 id: value.id.clone(),
-                parent_id: Some(dimension.id.into()),
+                parent_id: Some(dimension.id.clone()),
                 name: value.label.clone(),
                 kind: "value".into(),
-                dimension: Some(dimension.key.into()),
+                dimension: Some(dimension.key.clone()),
                 dimension_value: Some(value.key.clone()),
                 photo_count: value.asset_ids.len(),
                 child_count: 0,
@@ -142,15 +152,63 @@ pub fn graph_catalog(snapshot: &WorkspaceSnapshot, conn: &Connection) -> Result<
             ensure_graph(
                 conn,
                 &GraphDefinition {
-                    id: value.id,
-                    parent_id: Some(dimension.id.into()),
-                    name: value.label,
+                    id: value.id.clone(),
+                    parent_id: Some(dimension.id.clone()),
+                    name: value.label.clone(),
                     kind: "value",
-                    dimension: Some(dimension.key.into()),
-                    dimension_value: Some(value.key),
+                    dimension: Some(dimension.key.clone()),
+                    dimension_value: Some(value.key.clone()),
                 },
             )?;
         }
+    }
+
+    for value in &tag_dimension.values {
+        catalog.push(GraphInfo {
+            id: value.id.clone(),
+            parent_id: Some(GRAPHSPACES_ID.into()),
+            name: value.label.clone(),
+            kind: "value".into(),
+            dimension: Some("tags".into()),
+            dimension_value: Some(value.key.clone()),
+            photo_count: value.asset_ids.len(),
+            child_count: 0,
+        });
+        ensure_graph(
+            conn,
+            &GraphDefinition {
+                id: value.id.clone(),
+                parent_id: Some(GRAPHSPACES_ID.into()),
+                name: value.label.clone(),
+                kind: "value",
+                dimension: Some("tags".into()),
+                dimension_value: Some(value.key.clone()),
+            },
+        )?;
+    }
+
+    for smart in &smart_graphs {
+        catalog.push(GraphInfo {
+            id: smart.id.clone(),
+            parent_id: Some(GRAPHSPACES_ID.into()),
+            name: smart.name.clone(),
+            kind: "smart".into(),
+            dimension: None,
+            dimension_value: None,
+            photo_count: matching_smart_assets(snapshot, &smart.filters).len(),
+            child_count: 0,
+        });
+        ensure_graph(
+            conn,
+            &GraphDefinition {
+                id: smart.id.clone(),
+                parent_id: Some(GRAPHSPACES_ID.into()),
+                name: smart.name.clone(),
+                kind: "smart",
+                dimension: None,
+                dimension_value: None,
+            },
+        )?;
     }
 
     Ok(catalog)
@@ -169,7 +227,8 @@ pub fn build_graph_view(
         .cloned()
         .ok_or_else(|| GrapesError::NotFound(format!("图谱 {graph_id}")))?;
     let positions = load_positions(conn, graph_id)?;
-    let grouped = grouped_dimensions(snapshot);
+    let dimensions = grouped_dimensions(snapshot, conn)?;
+    let smart_graphs = load_smart_graphs(snapshot, conn)?;
     let assets_by_id = snapshot
         .assets
         .iter()
@@ -195,18 +254,18 @@ pub fn build_graph_view(
                 },
                 positions.get(&center_id),
             ));
-            for dimension in all_root_dimensions() {
-                let target = DIMENSIONS
-                    .iter()
-                    .find(|known| known.key == dimension.key)
-                    .map(|known| known.id);
-                let id = format!("portal:{}", dimension.key);
+            for dimension in dimensions
+                .iter()
+                .filter(|dimension| is_root_dimension(dimension))
+            {
+                let target = Some(dimension.id.as_str());
+                let id = format!("portal:{}", dimension.id);
                 nodes.push(graph_node(
                     GraphNodeSpec {
                         id: &id,
                         kind: GraphNodeKind::Portal,
                         dummy: false,
-                        label: dimension.label,
+                        label: &dimension.label,
                         subtitle: target
                             .map(|_| format!("{} photos", graph_count(&catalog, target))),
                         target_graph_id: target,
@@ -218,10 +277,51 @@ pub fn build_graph_view(
                 ));
                 edges.push(edge(&center_id, &id));
             }
+            let tags = dimensions
+                .iter()
+                .find(|dimension| dimension.key == "tags")
+                .ok_or_else(|| GrapesError::State("标签维度缺失".into()))?;
+            for value in &tags.values {
+                let id = format!("portal:{}", value.id);
+                nodes.push(graph_node(
+                    GraphNodeSpec {
+                        id: &id,
+                        kind: GraphNodeKind::Portal,
+                        dummy: false,
+                        label: &value.label,
+                        subtitle: Some(format!("{} photos", value.asset_ids.len())),
+                        target_graph_id: Some(&value.id),
+                        asset_id: None,
+                        photo_count: value.asset_ids.len(),
+                        available: true,
+                    },
+                    positions.get(&id),
+                ));
+                edges.push(edge(&center_id, &id));
+            }
+            for smart in &smart_graphs {
+                let id = format!("portal:{}", smart.id);
+                let count = graph_count(&catalog, Some(&smart.id));
+                nodes.push(graph_node(
+                    GraphNodeSpec {
+                        id: &id,
+                        kind: GraphNodeKind::Portal,
+                        dummy: false,
+                        label: &smart.name,
+                        subtitle: Some(format!("{count} photos")),
+                        target_graph_id: Some(&smart.id),
+                        asset_id: None,
+                        photo_count: count,
+                        available: true,
+                    },
+                    positions.get(&id),
+                ));
+                edges.push(edge(&center_id, &id));
+            }
         }
         "dimension" => {
             let dimension_key = graph.dimension.as_deref().unwrap_or_default();
-            let dimension = DIMENSIONS
+            let dimension = dimensions
                 .iter()
                 .find(|dimension| dimension.key == dimension_key)
                 .ok_or_else(|| GrapesError::State("未知的图谱维度".into()))?;
@@ -231,7 +331,7 @@ pub fn build_graph_view(
                     id: &center_id,
                     kind: GraphNodeKind::Portal,
                     dummy: true,
-                    label: dimension.label,
+                    label: &dimension.label,
                     subtitle: Some(format!("{} photos", graph.photo_count)),
                     target_graph_id: None,
                     asset_id: None,
@@ -240,11 +340,11 @@ pub fn build_graph_view(
                 },
                 positions.get(&center_id),
             ));
-            for value in grouped.get(dimension_key).into_iter().flatten() {
+            for value in &dimension.values {
                 let value_graph = catalog
                     .iter()
                     .find(|candidate| {
-                        candidate.parent_id.as_deref() == Some(dimension.id)
+                        candidate.parent_id.as_deref() == Some(dimension.id.as_str())
                             && candidate.dimension_value.as_deref() == Some(&value.key)
                     })
                     .ok_or_else(|| GrapesError::State("维度值图谱缺失".into()))?;
@@ -267,11 +367,12 @@ pub fn build_graph_view(
             }
         }
         "value" => {
+            let dimension = dimensions
+                .iter()
+                .find(|dimension| Some(dimension.key.as_str()) == graph.dimension.as_deref())
+                .ok_or_else(|| GrapesError::NotFound("分类维度不存在".into()))?;
             let value = find_value(
-                grouped
-                    .get(graph.dimension.as_deref().unwrap_or_default())
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
+                &dimension.values,
                 graph.dimension_value.as_deref().unwrap_or_default(),
             )
             .ok_or_else(|| GrapesError::NotFound("维度值不存在".into()))?;
@@ -294,6 +395,46 @@ pub fn build_graph_view(
                 let Some(asset) = assets_by_id.get(asset_id.as_str()) else {
                     continue;
                 };
+                let id = format!("asset:{}", asset.id);
+                nodes.push(graph_node(
+                    GraphNodeSpec {
+                        id: &id,
+                        kind: GraphNodeKind::Asset,
+                        dummy: false,
+                        label: &asset.filename,
+                        subtitle: asset_subtitle(asset),
+                        target_graph_id: None,
+                        asset_id: Some(&asset.id),
+                        photo_count: 1,
+                        available: true,
+                    },
+                    positions.get(&id),
+                ));
+                edges.push(edge(&center_id, &id));
+            }
+        }
+        "smart" => {
+            let smart = smart_graphs
+                .iter()
+                .find(|smart| smart.id == graph.id)
+                .ok_or_else(|| GrapesError::NotFound("组合图谱不存在".into()))?;
+            let matching = matching_smart_assets(snapshot, &smart.filters);
+            let center_id = format!("portal:{}", graph.id);
+            nodes.push(graph_node(
+                GraphNodeSpec {
+                    id: &center_id,
+                    kind: GraphNodeKind::Portal,
+                    dummy: true,
+                    label: &graph.name,
+                    subtitle: Some(format!("{} photos", matching.len())),
+                    target_graph_id: None,
+                    asset_id: None,
+                    photo_count: matching.len(),
+                    available: true,
+                },
+                positions.get(&center_id),
+            ));
+            for asset in matching {
                 let id = format!("asset:{}", asset.id);
                 nodes.push(graph_node(
                     GraphNodeSpec {
@@ -364,30 +505,123 @@ pub fn save_position(
     Ok(())
 }
 
-fn grouped_dimensions(snapshot: &WorkspaceSnapshot) -> HashMap<String, Vec<ValueGroup>> {
-    let mut result = HashMap::new();
-    for dimension in DIMENSIONS {
-        let mut groups: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
-        for asset in &snapshot.assets {
-            let (key, label) = dimension_value(dimension.key, asset);
+fn grouped_dimensions(
+    snapshot: &WorkspaceSnapshot,
+    conn: &Connection,
+) -> Result<Vec<DimensionGraph>> {
+    let mut result = vec![
+        auto_dimension(snapshot, "date", DATE_ID, "Date"),
+        auto_dimension(snapshot, "camera", CAMERA_ID, "Camera"),
+        auto_dimension(snapshot, "lens", LENS_ID, "Lens"),
+    ];
+    for dimension in load_dimensions(conn)? {
+        let key = if dimension.system_defined
+            && matches!(
+                dimension.kind.as_str(),
+                "time" | "weather" | "location" | "type" | "tone" | "custom"
+            ) {
+            dimension.kind.clone()
+        } else {
+            dimension.id.clone()
+        };
+        let values = dimension
+            .values
+            .iter()
+            .filter_map(|value| {
+                let asset_ids = snapshot
+                    .assets
+                    .iter()
+                    .filter(|asset| {
+                        asset.classifications.iter().any(|classification| {
+                            classification.status == "accepted"
+                                && classification.value_id == value.id
+                        })
+                    })
+                    .map(|asset| asset.id.clone())
+                    .collect::<Vec<_>>();
+                (!asset_ids.is_empty()).then(|| ValueGroup {
+                    id: stable_graph_id(&dimension.id, &value.id),
+                    key: value.id.clone(),
+                    label: value.name.clone(),
+                    asset_ids,
+                })
+            })
+            .collect();
+        result.push(DimensionGraph {
+            key,
+            id: format!("graph:{}", dimension.id),
+            label: dimension.name,
+            values,
+        });
+    }
+    result.push(tag_dimension(snapshot));
+    Ok(result)
+}
+
+fn auto_dimension(
+    snapshot: &WorkspaceSnapshot,
+    key: &str,
+    id: &str,
+    label: &str,
+) -> DimensionGraph {
+    let mut groups: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for asset in &snapshot.assets {
+        let (value_key, value_label) = dimension_value(key, asset);
+        groups
+            .entry(value_key)
+            .or_insert_with(|| (value_label, Vec::new()))
+            .1
+            .push(asset.id.clone());
+    }
+    DimensionGraph {
+        key: key.into(),
+        id: id.into(),
+        label: label.into(),
+        values: groups
+            .into_iter()
+            .map(|(value_key, (value_label, asset_ids))| ValueGroup {
+                id: stable_graph_id(key, &value_key),
+                key: value_key,
+                label: value_label,
+                asset_ids,
+            })
+            .collect(),
+    }
+}
+
+fn is_root_dimension(dimension: &DimensionGraph) -> bool {
+    dimension.key != "custom" && dimension.key != "tags"
+}
+
+fn tag_dimension(snapshot: &WorkspaceSnapshot) -> DimensionGraph {
+    let mut groups: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for asset in &snapshot.assets {
+        for tag in &asset.tags {
+            let key = normalized_key(tag);
+            if key.is_empty() {
+                continue;
+            }
             groups
                 .entry(key)
-                .or_insert_with(|| (label, Vec::new()))
+                .or_insert_with(|| (tag.clone(), Vec::new()))
                 .1
                 .push(asset.id.clone());
         }
-        let values = groups
+    }
+    DimensionGraph {
+        key: "tags".into(),
+        id: TAGS_ID.into(),
+        label: "Tags".into(),
+        values: groups
             .into_iter()
-            .map(|(key, (label, asset_ids))| ValueGroup {
-                id: stable_graph_id(dimension.key, &key),
-                key,
-                label,
+            .map(|(value_key, (value_label, asset_ids))| ValueGroup {
+                id: stable_graph_id("tags", &value_key),
+                key: value_key,
+                label: value_label,
                 asset_ids,
             })
-            .collect();
-        result.insert(dimension.key.to_string(), values);
+            .collect(),
     }
-    result
 }
 
 fn dimension_value(dimension: &str, asset: &AssetView) -> (String, String) {
@@ -439,6 +673,107 @@ fn normalized_key(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
+pub fn create_smart_graph(
+    conn: &Connection,
+    name: &str,
+    filters: &[SmartGraphFilter],
+) -> Result<String> {
+    if filters.is_empty() {
+        return Err(GrapesError::InvalidPath(
+            "组合图谱至少需要一个分类条件".into(),
+        ));
+    }
+    for filter in filters {
+        let dimension_exists = conn
+            .query_row(
+                "SELECT 1 FROM dimensions WHERE id = ?1",
+                [&filter.dimension_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !dimension_exists {
+            return Err(GrapesError::NotFound(format!(
+                "分类维度 {}",
+                filter.dimension_id
+            )));
+        }
+        if filter.value_ids.is_empty() {
+            return Err(GrapesError::InvalidPath(
+                "每个组合图谱条件至少需要一个分类值".into(),
+            ));
+        }
+        for value_id in &filter.value_ids {
+            let belongs = conn
+                .query_row(
+                    "SELECT 1 FROM dimension_values
+                     WHERE id = ?1 AND dimension_id = ?2",
+                    params![value_id, filter.dimension_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !belongs {
+                return Err(GrapesError::NotFound(format!("分类值 {value_id}")));
+            }
+        }
+    }
+
+    ensure_graph(
+        conn,
+        &GraphDefinition {
+            id: GRAPHSPACES_ID.into(),
+            parent_id: None,
+            name: "GraphSpaces".into(),
+            kind: "root",
+            dimension: None,
+            dimension_value: None,
+        },
+    )?;
+    let id = format!("graph:smart:{}", uuid::Uuid::new_v4());
+    let query = SmartGraphQuery {
+        all: filters.to_vec(),
+    };
+    conn.execute(
+        "INSERT INTO graphs(
+             id, parent_graph_id, name, kind, query_json, layout_algorithm, created_at
+         ) VALUES (?1, ?2, ?3, 'smart', ?4, 'forceatlas2', ?5)",
+        params![
+            id,
+            GRAPHSPACES_ID,
+            name,
+            serde_json::to_string(&query)?,
+            now()
+        ],
+    )?;
+    Ok(id)
+}
+
+pub fn delete_smart_graph(conn: &Connection, graph_id: &str) -> Result<()> {
+    let kind = conn
+        .query_row("SELECT kind FROM graphs WHERE id = ?1", [graph_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?
+        .ok_or_else(|| GrapesError::NotFound(format!("图谱 {graph_id}")))?;
+    if kind != "smart" {
+        return Err(GrapesError::InvalidPath("只能删除组合图谱".into()));
+    }
+
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute(
+        "DELETE FROM graph_positions WHERE graph_id = ?1",
+        [graph_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM graph_manual_members WHERE graph_id = ?1",
+        [graph_id],
+    )?;
+    transaction.execute("DELETE FROM graphs WHERE id = ?1", [graph_id])?;
+    transaction.commit()?;
+    Ok(())
+}
+
 fn stable_graph_id(dimension: &str, value: &str) -> String {
     let hash = blake3::hash(format!("{dimension}\0{value}").as_bytes());
     let hex = hash.to_hex();
@@ -446,6 +781,56 @@ fn stable_graph_id(dimension: &str, value: &str) -> String {
         "graph:{dimension}:{}",
         hex.as_str().get(..16).unwrap_or("0000000000000000")
     )
+}
+
+fn load_smart_graphs(
+    _snapshot: &WorkspaceSnapshot,
+    conn: &Connection,
+) -> Result<Vec<SmartGraphRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, query_json
+         FROM graphs
+         WHERE kind = 'smart' AND query_json IS NOT NULL
+         ORDER BY created_at, name COLLATE NOCASE",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut result = Vec::new();
+    for (id, name, query_json) in rows {
+        let query: SmartGraphQuery = serde_json::from_str(&query_json)?;
+        result.push(SmartGraphRow {
+            id,
+            name,
+            filters: query.all,
+        });
+    }
+    Ok(result)
+}
+
+fn matching_smart_assets<'a>(
+    snapshot: &'a WorkspaceSnapshot,
+    filters: &[SmartGraphFilter],
+) -> Vec<&'a AssetView> {
+    snapshot
+        .assets
+        .iter()
+        .filter(|asset| {
+            filters.iter().all(|filter| {
+                asset.classifications.iter().any(|classification| {
+                    classification.status == "accepted"
+                        && classification.dimension_id == filter.dimension_id
+                        && filter.value_ids.contains(&classification.value_id)
+                })
+            })
+        })
+        .collect()
 }
 
 fn ensure_graph(conn: &Connection, graph: &GraphDefinition) -> Result<()> {
@@ -540,56 +925,6 @@ fn asset_subtitle(asset: &AssetView) -> Option<String> {
         (None, Some(date)) => Some(date.into()),
         (None, None) => Some(asset.relative_path.clone()),
     }
-}
-
-fn all_root_dimensions() -> Vec<DimensionSpec> {
-    vec![
-        DimensionSpec {
-            key: "date",
-            id: DATE_ID,
-            label: "Date",
-        },
-        DimensionSpec {
-            key: "time",
-            id: "",
-            label: "Time",
-        },
-        DimensionSpec {
-            key: "weather",
-            id: "",
-            label: "Weather",
-        },
-        DimensionSpec {
-            key: "location",
-            id: "",
-            label: "Location",
-        },
-        DimensionSpec {
-            key: "type",
-            id: "",
-            label: "Type",
-        },
-        DimensionSpec {
-            key: "camera",
-            id: CAMERA_ID,
-            label: "Camera",
-        },
-        DimensionSpec {
-            key: "lens",
-            id: LENS_ID,
-            label: "Lens",
-        },
-        DimensionSpec {
-            key: "tone",
-            id: "",
-            label: "Tone",
-        },
-        DimensionSpec {
-            key: "custom",
-            id: "",
-            label: "Custom",
-        },
-    ]
 }
 
 fn find_value<'a>(values: &'a [ValueGroup], key: &str) -> Option<&'a ValueGroup> {

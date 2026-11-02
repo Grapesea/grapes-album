@@ -9,8 +9,9 @@ pub mod workspace;
 
 pub use error::{GrapesError, Result};
 pub use types::{
-    AssetView, FolderView, GraphEdge, GraphInfo, GraphNode, GraphNodeKind, GraphView,
-    ReconcileReport, WorkspaceSnapshot, WorkspaceView,
+    AssetClassificationView, AssetView, DimensionValueView, DimensionView, FolderView, GraphEdge,
+    GraphInfo, GraphNode, GraphNodeKind, GraphView, ReconcileReport, SmartGraphFilter,
+    WorkspaceSnapshot, WorkspaceView,
 };
 pub use watcher::WorkspaceWatcher;
 pub use workspace::Workspace;

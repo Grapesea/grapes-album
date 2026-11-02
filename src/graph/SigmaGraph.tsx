@@ -12,9 +12,21 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
-import type { GraphNode, GraphView } from "../bindings/types";
+import type {
+  Dimension,
+  GraphInfo,
+  GraphNode,
+  GraphView,
+  SmartGraphFilter,
+} from "../bindings/types";
+import {
+  classificationValueDisplayName,
+  dimensionDisplayName,
+} from "../classificationLabels";
 import { useI18n } from "../i18n";
 import {
   constrainToBunch,
@@ -31,27 +43,75 @@ interface SigmaGraphProps {
   workspaceId: string;
   view: GraphView;
   layoutNonce: number;
+  classificationDimensions: Dimension[];
+  smartGraphs: GraphInfo[];
   onNavigate: (graphId: string) => void;
   onOpenAsset: (assetId: string) => void;
   onSavePositions: (positions: SavedPosition[]) => Promise<void>;
+  onCreateSmartGraph: (
+    name: string,
+    filters: SmartGraphFilter[],
+  ) => Promise<boolean>;
+  onDeleteSmartGraph: (graphId: string) => Promise<boolean>;
 }
+
+type GraphColorFamily = "capture" | "classification" | "tag";
+
+const GRAPH_COLORS: Record<
+  GraphColorFamily,
+  { subgraph: string; nested: string; asset: string; edge: string }
+> = {
+  capture: {
+    subgraph: "#1d565c",
+    nested: "#2d747a",
+    asset: "#89b7bb",
+    edge: "#2b4549",
+  },
+  classification: {
+    subgraph: "#432657",
+    nested: "#60417a",
+    asset: "#ad90c8",
+    edge: "#3c3046",
+  },
+  tag: {
+    subgraph: "#73323b",
+    nested: "#8d4852",
+    asset: "#c88f96",
+    edge: "#563038",
+  },
+};
+
+const CAPTURE_DIMENSIONS = new Set(["date", "camera", "lens"]);
 
 export function SigmaGraph({
   workspaceId,
   view,
   layoutNonce,
+  classificationDimensions,
+  smartGraphs,
   onNavigate,
   onOpenAsset,
   onSavePositions,
+  onCreateSmartGraph,
+  onDeleteSmartGraph,
 }: SigmaGraphProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const [inspected, setInspected] = useState<GraphNode | null>(null);
   const [controlsOpen, setControlsOpen] = useState(false);
+  const [smartOpen, setSmartOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [nodeScale, setNodeScale] = useState(1);
   const [edgeScale, setEdgeScale] = useState(0.7);
   const [labelOpacity, setLabelOpacity] = useState(0.7);
+  const [smartGraphName, setSmartGraphName] = useState("");
+  const [smartFilters, setSmartFilters] = useState<
+    Record<string, string[]>
+  >({});
+  const [creatingSmartGraph, setCreatingSmartGraph] = useState(false);
+  const [deletingSmartGraph, setDeletingSmartGraph] = useState<string | null>(
+    null,
+  );
   const [, updatePins] = useState(0);
   const layoutStorageKey = `grapes.graph.layout:${workspaceId}:${view.graph.id}`;
   const hasCurrentLayout = useMemo(() => {
@@ -78,13 +138,13 @@ export function SigmaGraph({
       new Set(
         contentNodes
           .filter((node) =>
-            `${displayNodeLabel(node, t)} ${node.subtitle ?? ""}`
+            `${displayNodeLabel(node, locale)} ${node.subtitle ?? ""}`
               .toLocaleLowerCase()
               .includes(query.trim().toLocaleLowerCase()),
           )
           .map((node) => node.id),
       ),
-    [contentNodes, query, t],
+    [contentNodes, locale, query],
   );
 
   const appearance = useRef({
@@ -94,7 +154,7 @@ export function SigmaGraph({
     labelOpacity,
     nodeScale,
     edgeScale,
-    t,
+    locale,
   });
   appearance.current = {
     hovered,
@@ -103,7 +163,7 @@ export function SigmaGraph({
     labelOpacity,
     nodeScale,
     edgeScale,
-    t,
+    locale,
   };
   const options = useMemo<SigmaOptions>(
     () => ({
@@ -148,7 +208,7 @@ export function SigmaGraph({
         enableCameraRotation: false,
       },
       nodeReducer: (key, attributes) => {
-        const { hovered, query, matches, labelOpacity, nodeScale, t } =
+        const { hovered, query, matches, labelOpacity, nodeScale, locale } =
           appearance.current;
         const node = nodeById.get(key);
         if (!node || node.dummy)
@@ -167,11 +227,13 @@ export function SigmaGraph({
         const available = Boolean(nodeDestination(node));
         return {
           ...attributes,
-          label: displayNodeLabel(node, t),
+          label: displayNodeLabel(node, locale),
           labelVisibility:
             labelOpacity === 0 || dimmed
               ? "hidden"
-              : active || contentNodes.length < 30
+              : active ||
+                  view.graph.kind === "root" ||
+                  contentNodes.length < 30
                 ? "visible"
                 : "auto",
           labelColor: `rgba(204, 200, 213, ${active ? 1 : labelOpacity})`,
@@ -183,9 +245,7 @@ export function SigmaGraph({
                 ? "#65616b"
                 : graph.getNodeAttribute(key, "fixed")
                   ? "#d9bd82"
-                  : node.kind === "portal"
-                    ? "#b9a7d3"
-                    : "#aab0bc",
+                  : graphNodeColor(node, view),
           size:
             (node.kind === "portal" ? 8 : 5.5) *
             nodeScale *
@@ -197,14 +257,25 @@ export function SigmaGraph({
         const { hovered, edgeScale } = appearance.current;
         const [source, target] = graph.extremities(edge);
         const active = hovered?.id === source || hovered?.id === target;
+        const sourceNode = nodeById.get(source);
+        const targetNode = nodeById.get(target);
+        const edgeNode =
+          sourceNode?.dummy && targetNode ? targetNode : (sourceNode ?? targetNode);
+        const palette = edgeNode
+          ? GRAPH_COLORS[graphFamilyForNode(edgeNode, view)]
+          : GRAPH_COLORS.classification;
         return {
           ...attributes,
-          color: active ? "#a18bbd" : "#444148",
+          color: active
+            ? hovered
+              ? graphNodeColor(hovered, view)
+              : palette.asset
+            : palette.edge,
           size: edgeScale === 0 ? 0 : active ? edgeScale + 0.5 : edgeScale,
         };
       },
     }),
-    [graph, nodeById, contentNodes],
+    [graph, nodeById, contentNodes, view],
   );
 
   const openNode = useCallback(
@@ -248,16 +319,35 @@ export function SigmaGraph({
       </SigmaContainer>
 
       <div className="graph-options">
-        <button
-          type="button"
-          className={`graph-options-toggle ${controlsOpen ? "active" : ""}`}
-          title={t("graphSettings")}
-          aria-label={t("graphSettings")}
-          aria-expanded={controlsOpen}
-          onClick={() => setControlsOpen((open) => !open)}
-        >
-          <SlidersHorizontal size={16} />
-        </button>
+        <div className="graph-options-actions">
+          <button
+            type="button"
+            className={`graph-smart-toggle ${smartOpen ? "active" : ""}`}
+            title={t("smartGraph")}
+            aria-label={t("smartGraph")}
+            aria-expanded={smartOpen}
+            onClick={() => {
+              setSmartOpen((open) => !open);
+              setControlsOpen(false);
+            }}
+          >
+            <Sparkles size={14} />
+            {t("smartGraph")}
+          </button>
+          <button
+            type="button"
+            className={`graph-options-toggle ${controlsOpen ? "active" : ""}`}
+            title={t("graphSettings")}
+            aria-label={t("graphSettings")}
+            aria-expanded={controlsOpen}
+            onClick={() => {
+              setControlsOpen((open) => !open);
+              setSmartOpen(false);
+            }}
+          >
+            <SlidersHorizontal size={16} />
+          </button>
+        </div>
         {controlsOpen && (
           <aside
             className="graph-settings-panel"
@@ -352,14 +442,187 @@ export function SigmaGraph({
                       className={
                         node.kind === "portal" ? "portal-dot" : "asset-dot"
                       }
+                      style={{ background: graphNodeColor(node, view) }}
                     />
-                    <span>{displayNodeLabel(node, t)}</span>
+                    <span>{displayNodeLabel(node, locale)}</span>
                     <small>{node.available ? node.photoCount : "—"}</small>
                   </button>
                 ))}
               {matches.size === 0 && <p>{t("graphNoMatches")}</p>}
               {matches.size > 100 && <p>{t("graphSearchMore")}</p>}
             </div>
+          </aside>
+        )}
+        {smartOpen && (
+          <aside
+            className="graph-settings-panel graph-smart-panel"
+            aria-label={t("smartGraph")}
+          >
+            <header>
+              <strong>{t("smartGraph")}</strong>
+              <button
+                type="button"
+                title={t("closePanel")}
+                aria-label={t("closePanel")}
+                onClick={() => setSmartOpen(false)}
+              >
+                <X size={14} />
+              </button>
+            </header>
+            <section className="graph-smart-builder">
+              <header>
+                <strong>{t("createSmartGraph")}</strong>
+                <button
+                  type="button"
+                  onClick={() => setSmartFilters({})}
+                  disabled={Object.keys(smartFilters).length === 0}
+                >
+                  {t("clearConditions")}
+                </button>
+              </header>
+              <p>{t("smartGraphHint")}</p>
+              <input
+                className="graph-smart-name"
+                value={smartGraphName}
+                onChange={(event) => setSmartGraphName(event.target.value)}
+                placeholder={t("smartGraphName")}
+                aria-label={t("smartGraphName")}
+              />
+              <div className="graph-smart-values">
+                {classificationDimensions.map((dimension) => (
+                  <details key={dimension.id}>
+                    <summary>
+                      {dimensionDisplayName(
+                        dimension.kind || dimension.id,
+                        dimension.name,
+                        locale,
+                      )}
+                      <small>
+                        {(smartFilters[dimension.id] ?? []).length || ""}
+                      </small>
+                    </summary>
+                    {dimension.values.map((value) => (
+                      <label key={value.id}>
+                        <input
+                          type="checkbox"
+                          checked={(smartFilters[dimension.id] ?? []).includes(
+                            value.id,
+                          )}
+                          onChange={(event) => {
+                            setSmartFilters((current) => {
+                              const existing = current[dimension.id] ?? [];
+                              const values = event.target.checked
+                                ? [...existing, value.id]
+                                : existing.filter((id) => id !== value.id);
+                              if (values.length === 0) {
+                                const next = { ...current };
+                                delete next[dimension.id];
+                                return next;
+                              }
+                              return { ...current, [dimension.id]: values };
+                            });
+                          }}
+                        />
+                        <span>
+                          {classificationValueDisplayName(
+                            value.id,
+                            value.name,
+                            locale,
+                          )}
+                        </span>
+                      </label>
+                    ))}
+                  </details>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="graph-create-smart"
+                disabled={
+                  creatingSmartGraph ||
+                  !smartGraphName.trim() ||
+                  Object.keys(smartFilters).length === 0
+                }
+                onClick={async () => {
+                  const filters = Object.entries(smartFilters).map(
+                    ([dimensionId, valueIds]) => ({
+                      dimensionId,
+                      valueIds,
+                    }),
+                  );
+                  setCreatingSmartGraph(true);
+                  try {
+                    const created = await onCreateSmartGraph(
+                      smartGraphName.trim(),
+                      filters,
+                    );
+                    if (created) {
+                      setSmartGraphName("");
+                      setSmartFilters({});
+                    }
+                  } finally {
+                    setCreatingSmartGraph(false);
+                  }
+                }}
+              >
+                {t("createSmartGraph")}
+              </button>
+            </section>
+            <section className="graph-smart-list">
+              <header>
+                <strong>{t("savedSmartGraphs")}</strong>
+                <small>{smartGraphs.length}</small>
+              </header>
+              {smartGraphs.length === 0 ? (
+                <p>{t("noSmartGraphs")}</p>
+              ) : (
+                smartGraphs.map((smartGraph) => (
+                  <div className="graph-smart-list-item" key={smartGraph.id}>
+                    <button
+                      type="button"
+                      className={`graph-smart-entry ${
+                        view.graph.id === smartGraph.id ? "current" : ""
+                      }`}
+                      onClick={() => {
+                        setSmartOpen(false);
+                        onNavigate(smartGraph.id);
+                      }}
+                    >
+                      <span>{smartGraph.name}</span>
+                      <small>
+                        {t("photoCount", { count: smartGraph.photoCount })}
+                      </small>
+                    </button>
+                    <button
+                      type="button"
+                      className="graph-smart-delete"
+                      title={t("deleteSmartGraph")}
+                      aria-label={t("deleteSmartGraph")}
+                      disabled={deletingSmartGraph !== null}
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            t("deleteSmartGraphConfirm", {
+                              name: smartGraph.name,
+                            }),
+                          )
+                        ) {
+                          return;
+                        }
+                        setDeletingSmartGraph(smartGraph.id);
+                        try {
+                          await onDeleteSmartGraph(smartGraph.id);
+                        } finally {
+                          setDeletingSmartGraph(null);
+                        }
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </section>
           </aside>
         )}
       </div>
@@ -371,8 +634,9 @@ export function SigmaGraph({
               className={
                 inspected.kind === "portal" ? "portal-dot" : "asset-dot"
               }
+              style={{ background: graphNodeColor(inspected, view) }}
             />
-            <strong>{displayNodeLabel(inspected, t)}</strong>
+            <strong>{displayNodeLabel(inspected, locale)}</strong>
             <button
               type="button"
               aria-label={t("closePanel")}
@@ -702,24 +966,40 @@ function CameraControls() {
   );
 }
 
-function displayNodeLabel(node: GraphNode, t: ReturnType<typeof useI18n>["t"]) {
+function graphFamilyForDimension(
+  dimension: string | null | undefined,
+): GraphColorFamily {
+  const key = dimension?.split(":").at(-1)?.toLocaleLowerCase() ?? "";
+  if (CAPTURE_DIMENSIONS.has(key)) return "capture";
+  if (key === "tags" || dimension?.startsWith("graph:tags:")) return "tag";
+  return "classification";
+}
+
+function graphFamilyForNode(node: GraphNode, view: GraphView) {
+  if (node.kind === "asset" || view.graph.kind !== "root") {
+    return graphFamilyForDimension(view.graph.dimension);
+  }
+  return graphFamilyForDimension(node.targetGraphId);
+}
+
+function graphNodeColor(node: GraphNode, view: GraphView) {
+  const palette = GRAPH_COLORS[graphFamilyForNode(node, view)];
+  if (node.kind === "asset") return palette.asset;
+  return view.graph.kind === "root" ? palette.subgraph : palette.nested;
+}
+
+function displayNodeLabel(
+  node: GraphNode,
+  locale: ReturnType<typeof useI18n>["locale"],
+) {
   const id = node.id;
   const dimension = id.startsWith("portal:graph:dimension:")
     ? id.slice("portal:graph:dimension:".length)
     : id.startsWith("portal:") && !id.includes(":graph:")
       ? id.slice("portal:".length)
       : "";
-  const keys = {
-    date: "dimensionDate",
-    time: "dimensionTime",
-    weather: "dimensionWeather",
-    location: "dimensionLocation",
-    type: "dimensionType",
-    camera: "dimensionCamera",
-    lens: "dimensionLens",
-    tone: "dimensionTone",
-    custom: "dimensionCustom",
-  } as const;
-  const key = keys[dimension as keyof typeof keys];
-  return key ? t(key) : node.label;
+  if (dimension && /^[a-z-]+$/.test(dimension)) {
+    return dimensionDisplayName(dimension, node.label, locale);
+  }
+  return classificationValueDisplayName("", node.label, locale);
 }

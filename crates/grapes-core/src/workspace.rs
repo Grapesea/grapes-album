@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::database::{
-    insert_asset_tx, insert_folder_tx, load_asset_tags, load_assets, load_folders,
-    record_reconcile_tx, update_asset_tx, update_folder_tx, AssetRow, AssetWrite, Database,
-    FolderRow, DATABASE_SCHEMA_VERSION,
+    insert_asset_tx, insert_folder_tx, load_asset_classifications, load_asset_tags, load_assets,
+    load_folders, record_reconcile_tx, update_asset_tx, update_folder_tx, AssetRow, AssetWrite,
+    Database, FolderRow, DATABASE_SCHEMA_VERSION,
 };
 use crate::error::{GrapesError, Result};
 use crate::filesystem::{
@@ -21,7 +21,8 @@ use crate::graph;
 use crate::media::thumbnail::thumbnail_path;
 use crate::media::{ensure_thumbnail, extract_metadata, MediaMetadata, ThumbnailResult};
 use crate::types::{
-    AssetView, FolderView, GraphInfo, GraphView, ReconcileReport, WorkspaceSnapshot, WorkspaceView,
+    AssetView, DimensionValueView, DimensionView, FolderView, GraphInfo, GraphView,
+    ReconcileReport, SmartGraphFilter, WorkspaceSnapshot, WorkspaceView,
 };
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -164,6 +165,7 @@ impl Workspace {
         let folders = load_folders(&self.db.conn)?;
         let assets = load_assets(&self.db.conn)?;
         let tags_by_asset = load_asset_tags(&self.db.conn)?;
+        let classifications_by_asset = load_asset_classifications(&self.db.conn)?;
         let folder_paths = compute_folder_paths(&folders, &self.manifest.root_folder_id);
 
         let mut folder_views = folders
@@ -182,6 +184,10 @@ impl Workspace {
             .into_iter()
             .map(|asset| {
                 let tags = tags_by_asset.get(&asset.id).cloned().unwrap_or_default();
+                let classifications = classifications_by_asset
+                    .get(&asset.id)
+                    .cloned()
+                    .unwrap_or_default();
                 let parent = folder_paths
                     .get(&asset.folder_id)
                     .cloned()
@@ -207,6 +213,7 @@ impl Workspace {
                     tags,
                     metadata,
                     has_thumbnail,
+                    classifications,
                 }
             })
             .collect::<Vec<_>>();
@@ -800,6 +807,55 @@ impl Workspace {
         graph::save_position(&self.db.conn, graph_id, node_key, x, y, pinned)
     }
 
+    pub fn classification_schema(&self) -> Result<Vec<DimensionView>> {
+        self.db.dimensions()
+    }
+
+    pub fn set_asset_classification(
+        &mut self,
+        asset_id: &str,
+        value_id: &str,
+        selected: bool,
+    ) -> Result<()> {
+        self.db.asset(asset_id)?;
+        self.db
+            .set_asset_classification(asset_id, value_id, selected)
+    }
+
+    pub fn create_custom_dimension(&mut self, name: &str) -> Result<DimensionView> {
+        validate_classification_name(name)?;
+        self.db.create_custom_dimension(name.trim())
+    }
+
+    pub fn create_dimension_value(
+        &mut self,
+        dimension_id: &str,
+        name: &str,
+    ) -> Result<DimensionValueView> {
+        validate_classification_name(name)?;
+        self.db.create_dimension_value(dimension_id, name.trim())
+    }
+
+    pub fn create_smart_graph(
+        &self,
+        name: &str,
+        filters: &[SmartGraphFilter],
+    ) -> Result<GraphInfo> {
+        validate_classification_name(name)?;
+        let id = graph::create_smart_graph(&self.db.conn, name.trim(), filters)?;
+        let snapshot = self.snapshot()?;
+        graph::graph_catalog(&snapshot, &self.db.conn)?
+            .into_iter()
+            .find(|graph| graph.id == id)
+            .ok_or_else(|| GrapesError::State("组合图谱创建后未进入目录".into()))
+    }
+
+    pub fn delete_smart_graph(&self, graph_id: &str) -> Result<Vec<GraphInfo>> {
+        graph::delete_smart_graph(&self.db.conn, graph_id)?;
+        let snapshot = self.snapshot()?;
+        graph::graph_catalog(&snapshot, &self.db.conn)
+    }
+
     fn relocate_folder(
         &mut self,
         folder: FolderRow,
@@ -1071,6 +1127,22 @@ fn join_relative(parent: &str, name: &str) -> String {
     } else {
         format!("{parent}/{name}")
     }
+}
+
+fn validate_classification_name(name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(GrapesError::InvalidPath("分类名称不能为空".into()));
+    }
+    if name.chars().count() > 40 {
+        return Err(GrapesError::InvalidPath(
+            "分类名称不能超过 40 个字符".into(),
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(GrapesError::InvalidPath("分类名称不能包含控制字符".into()));
+    }
+    Ok(())
 }
 
 fn now() -> String {

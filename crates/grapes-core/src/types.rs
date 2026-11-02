@@ -36,6 +36,51 @@ pub struct AssetView {
     pub tags: Vec<String>,
     pub metadata: MediaMetadata,
     pub has_thumbnail: bool,
+    pub classifications: Vec<AssetClassificationView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DimensionValueView {
+    pub id: String,
+    pub dimension_id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DimensionView {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub sort_order: i64,
+    pub system_defined: bool,
+    pub values: Vec<DimensionValueView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetClassificationView {
+    pub dimension_id: String,
+    pub dimension_name: String,
+    pub dimension_kind: String,
+    pub value_id: String,
+    pub value_name: String,
+    pub color: Option<String>,
+    pub source: String,
+    pub confidence: Option<f64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartGraphFilter {
+    pub dimension_id: String,
+    pub value_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

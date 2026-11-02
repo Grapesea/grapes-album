@@ -26,6 +26,43 @@ export interface AssetView {
   tags: string[];
   metadata: PhotoMetadata;
   hasThumbnail: boolean;
+  classifications: AssetClassification[];
+}
+
+export interface DimensionValue {
+  id: string;
+  dimensionId: string;
+  parentId: string | null;
+  name: string;
+  description: string | null;
+  color: string | null;
+  sortOrder: number;
+}
+
+export interface Dimension {
+  id: string;
+  name: string;
+  kind: string;
+  sortOrder: number;
+  systemDefined: boolean;
+  values: DimensionValue[];
+}
+
+export interface AssetClassification {
+  dimensionId: string;
+  dimensionName: string;
+  dimensionKind: string;
+  valueId: string;
+  valueName: string;
+  color: string | null;
+  source: string;
+  confidence: number | null;
+  status: string;
+}
+
+export interface SmartGraphFilter {
+  dimensionId: string;
+  valueIds: string[];
 }
 
 export interface PhotoMetadata {
@@ -64,7 +101,7 @@ export interface GraphInfo {
   id: string;
   parentId: string | null;
   name: string;
-  kind: "root" | "dimension" | "value";
+  kind: "root" | "dimension" | "value" | "smart";
   dimension: string | null;
   dimensionValue: string | null;
   photoCount: number;

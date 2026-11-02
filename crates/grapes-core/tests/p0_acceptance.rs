@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use grapes_core::{GraphNodeKind, Workspace};
+use grapes_core::{GraphNodeKind, SmartGraphFilter, Workspace};
 use rusqlite::Connection;
 
 fn write_photo(path: &Path, contents: &[u8]) {
@@ -35,26 +35,27 @@ fn initializes_sidecar_and_database_migrations() {
     )
     .expect("manifest json");
     assert_eq!(manifest["schemaVersion"], 1);
-    assert_eq!(snapshot.workspace.schema_version, 4);
+    assert_eq!(snapshot.workspace.schema_version, 5);
 
     let connection = Connection::open(temp.path().join(".grapes/grapes.db")).expect("database");
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let table_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
              WHERE type = 'table'
                AND name IN (
                    'folders', 'assets', 'fs_operations', 'asset_tags',
-                   'graphs', 'graph_manual_members', 'graph_positions'
+                   'graphs', 'graph_manual_members', 'graph_positions',
+                   'dimensions', 'dimension_values', 'classifications'
                )",
             [],
             |row| row.get(0),
         )
         .expect("table count");
-    assert_eq!(table_count, 7);
+    assert_eq!(table_count, 10);
 }
 
 #[test]
@@ -80,7 +81,7 @@ fn upgrades_an_existing_v1_database_in_place() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        4
+        5
     );
     let connection = Connection::open(database_path).expect("database");
     let operations_table: i64 = connection
@@ -249,7 +250,10 @@ fn graphspaces_build_automatic_metadata_graphs_and_persist_positions() {
         let node = root
             .nodes
             .iter()
-            .find(|node| node.id == format!("portal:{dimension}"))
+            .find(|node| {
+                node.label.eq_ignore_ascii_case(dimension)
+                    || node.id == format!("portal:graph:dimension:{dimension}")
+            })
             .expect("dimension portal");
         assert!(node.available);
         assert!(node.target_graph_id.is_some());
@@ -322,6 +326,149 @@ fn graphspaces_build_automatic_metadata_graphs_and_persist_positions() {
         node.kind == GraphNodeKind::Asset
             && node.asset_id.as_deref() == Some(initial.assets[0].id.as_str())
     }));
+}
+
+#[test]
+fn classifications_custom_dimensions_and_smart_graphs_persist() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_photo(&temp.path().join("rain.jpg"), b"rainy photo");
+
+    let mut workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let asset_id = workspace.snapshot().expect("snapshot").assets[0].id.clone();
+    let schema = workspace.classification_schema().expect("schema");
+    assert!(schema.iter().any(|dimension| dimension.kind == "time"));
+    assert!(schema.iter().any(|dimension| dimension.kind == "weather"));
+    assert!(schema.iter().any(|dimension| dimension.kind == "type"));
+    assert!(schema.iter().any(|dimension| dimension.kind == "tone"));
+
+    workspace
+        .set_asset_classification(&asset_id, "dimension:time:night", true)
+        .expect("time classification");
+    workspace
+        .set_asset_classification(&asset_id, "dimension:weather:rain", true)
+        .expect("weather classification");
+    workspace
+        .set_asset_classification(&asset_id, "dimension:type:street", true)
+        .expect("type classification");
+    workspace
+        .set_asset_tags(&asset_id, &["旅行".into()])
+        .expect("tags for graph");
+    let classified = workspace.snapshot().expect("snapshot");
+    assert_eq!(classified.assets[0].classifications.len(), 3);
+    assert!(classified.assets[0]
+        .classifications
+        .iter()
+        .all(|classification| classification.source == "manual"));
+
+    let mood = workspace
+        .create_custom_dimension("Mood")
+        .expect("custom dimension");
+    let atmospheric = workspace
+        .create_dimension_value(&mood.id, "Atmospheric")
+        .expect("custom value");
+    workspace
+        .set_asset_classification(&asset_id, &atmospheric.id, true)
+        .expect("custom classification");
+
+    let catalog = workspace.graph_catalog().expect("catalog");
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.kind == "dimension" && graph.dimension.as_deref() == Some("time")));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.name == "Night" && graph.photo_count == 1));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.name == "Rain" && graph.photo_count == 1));
+    assert!(catalog
+        .iter()
+        .any(|graph| graph.name == "Mood" && graph.child_count == 1));
+    let tag_graph = catalog
+        .iter()
+        .find(|graph| {
+            graph.kind == "value"
+                && graph.dimension.as_deref() == Some("tags")
+                && graph.name == "旅行"
+        })
+        .expect("tag value graph");
+    assert_eq!(tag_graph.parent_id.as_deref(), Some("graphspaces"));
+    assert_eq!(tag_graph.photo_count, 1);
+    assert!(!catalog
+        .iter()
+        .any(|graph| graph.kind == "dimension" && graph.dimension.as_deref() == Some("tags")));
+    let tag_view = workspace
+        .graph_view(Some(&tag_graph.id))
+        .expect("tag graph view");
+    assert!(tag_view
+        .nodes
+        .iter()
+        .any(|node| node.kind == GraphNodeKind::Asset && node.photo_count == 1));
+    let root = workspace.graph_view(None).expect("root graph");
+    assert!(!root
+        .nodes
+        .iter()
+        .any(|node| node.id == "portal:graph:dimension:custom"));
+    assert!(root
+        .nodes
+        .iter()
+        .any(|node| node.label == "Mood" && node.target_graph_id.is_some()));
+    let tag_portal = root
+        .nodes
+        .iter()
+        .find(|node| node.label == "旅行")
+        .expect("tag graph portal");
+    assert!(tag_portal.available);
+    assert_eq!(
+        tag_portal.target_graph_id.as_deref(),
+        Some(tag_graph.id.as_str())
+    );
+    assert!(!root
+        .nodes
+        .iter()
+        .any(|node| node.id == "portal:graph:dimension:tags"));
+
+    let smart = workspace
+        .create_smart_graph(
+            "Rainy Night",
+            &[
+                SmartGraphFilter {
+                    dimension_id: "dimension:time".into(),
+                    value_ids: vec!["dimension:time:night".into()],
+                },
+                SmartGraphFilter {
+                    dimension_id: "dimension:weather".into(),
+                    value_ids: vec!["dimension:weather:rain".into()],
+                },
+            ],
+        )
+        .expect("smart graph");
+    assert_eq!(smart.kind, "smart");
+    assert_eq!(smart.photo_count, 1);
+    let smart_view = workspace
+        .graph_view(Some(&smart.id))
+        .expect("smart graph view");
+    assert!(smart_view.nodes.iter().any(|node| {
+        node.kind == GraphNodeKind::Asset && node.asset_id.as_deref() == Some(asset_id.as_str())
+    }));
+    workspace
+        .save_graph_position(&smart.id, "asset:test", 24.0, -36.0, true)
+        .expect("smart graph position");
+    let catalog_after_delete = workspace
+        .delete_smart_graph(&smart.id)
+        .expect("delete smart graph");
+    assert!(!catalog_after_delete
+        .iter()
+        .any(|graph| graph.id == smart.id));
+    assert!(workspace.graph_view(Some(&smart.id)).is_err());
+
+    workspace
+        .set_asset_classification(&asset_id, "dimension:weather:rain", false)
+        .expect("remove classification");
+    let after_removal = workspace.snapshot().expect("snapshot");
+    assert!(!after_removal.assets[0]
+        .classifications
+        .iter()
+        .any(|classification| classification.value_id == "dimension:weather:rain"));
 }
 
 #[test]

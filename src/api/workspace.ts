@@ -1,8 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  Dimension,
   GraphInfo,
   GraphView,
+  SmartGraphFilter,
   WorkspaceSnapshot,
 } from "../bindings/types";
 
@@ -93,4 +95,38 @@ export function saveGraphPosition(
     y,
     pinned,
   });
+}
+
+export function getClassificationSchema(): Promise<Dimension[]> {
+  return invoke("classification_schema");
+}
+
+export function setAssetClassification(
+  assetId: string,
+  valueId: string,
+  selected: boolean,
+): Promise<WorkspaceSnapshot> {
+  return invoke("set_asset_classification", { assetId, valueId, selected });
+}
+
+export function createCustomDimension(name: string): Promise<Dimension[]> {
+  return invoke("create_custom_dimension", { name });
+}
+
+export function createDimensionValue(
+  dimensionId: string,
+  name: string,
+): Promise<Dimension[]> {
+  return invoke("create_dimension_value", { dimensionId, name });
+}
+
+export function createSmartGraph(
+  name: string,
+  filters: SmartGraphFilter[],
+): Promise<GraphInfo> {
+  return invoke("create_smart_graph", { name, filters });
+}
+
+export function deleteSmartGraph(graphId: string): Promise<GraphInfo[]> {
+  return invoke("delete_smart_graph", { graphId });
 }

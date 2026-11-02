@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use grapes_core::{GraphInfo, GraphView, Workspace, WorkspaceSnapshot, WorkspaceWatcher};
+use grapes_core::{
+    DimensionView, GraphInfo, GraphView, SmartGraphFilter, Workspace, WorkspaceSnapshot,
+    WorkspaceWatcher,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct Session {
@@ -202,6 +205,97 @@ fn save_graph_position(
     result
 }
 
+#[tauri::command]
+fn classification_schema(
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<DimensionView>, String> {
+    let workspace = active_workspace(&state)?;
+    let schema = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .classification_schema()
+        .map_err(error_string)?;
+    Ok(schema)
+}
+
+#[tauri::command]
+fn set_asset_classification(
+    state: State<'_, AppState>,
+    asset_id: String,
+    value_id: String,
+    selected: bool,
+) -> std::result::Result<WorkspaceSnapshot, String> {
+    let workspace = active_workspace(&state)?;
+    workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .set_asset_classification(&asset_id, &value_id, selected)
+        .map_err(error_string)?;
+    read_snapshot(&workspace)
+}
+
+#[tauri::command]
+fn create_custom_dimension(
+    state: State<'_, AppState>,
+    name: String,
+) -> std::result::Result<Vec<DimensionView>, String> {
+    let workspace = active_workspace(&state)?;
+    let schema = {
+        let mut workspace = workspace.lock().map_err(|_| "工作区锁已损坏".to_owned())?;
+        workspace
+            .create_custom_dimension(&name)
+            .map_err(error_string)?;
+        workspace.classification_schema().map_err(error_string)?
+    };
+    Ok(schema)
+}
+
+#[tauri::command]
+fn create_dimension_value(
+    state: State<'_, AppState>,
+    dimension_id: String,
+    name: String,
+) -> std::result::Result<Vec<DimensionView>, String> {
+    let workspace = active_workspace(&state)?;
+    let schema = {
+        let mut workspace = workspace.lock().map_err(|_| "工作区锁已损坏".to_owned())?;
+        workspace
+            .create_dimension_value(&dimension_id, &name)
+            .map_err(error_string)?;
+        workspace.classification_schema().map_err(error_string)?
+    };
+    Ok(schema)
+}
+
+#[tauri::command]
+fn create_smart_graph(
+    state: State<'_, AppState>,
+    name: String,
+    filters: Vec<SmartGraphFilter>,
+) -> std::result::Result<GraphInfo, String> {
+    let workspace = active_workspace(&state)?;
+    let graph_info = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .create_smart_graph(&name, &filters)
+        .map_err(error_string)?;
+    Ok(graph_info)
+}
+
+#[tauri::command]
+fn delete_smart_graph(
+    state: State<'_, AppState>,
+    graph_id: String,
+) -> std::result::Result<Vec<GraphInfo>, String> {
+    let workspace = active_workspace(&state)?;
+    let catalog = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .delete_smart_graph(&graph_id)
+        .map_err(error_string);
+    catalog
+}
+
 fn active_workspace(
     state: &State<'_, AppState>,
 ) -> std::result::Result<Arc<Mutex<Workspace>>, String> {
@@ -357,7 +451,13 @@ pub fn run() {
             set_asset_tags,
             graph_catalog,
             graph_view,
-            save_graph_position
+            save_graph_position,
+            classification_schema,
+            set_asset_classification,
+            create_custom_dimension,
+            create_dimension_value,
+            create_smart_graph,
+            delete_smart_graph
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grapes");

@@ -5,8 +5,9 @@ use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::error::{GrapesError, Result};
+use crate::types::{AssetClassificationView, DimensionValueView, DimensionView};
 
-pub const DATABASE_SCHEMA_VERSION: i64 = 4;
+pub const DATABASE_SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct FolderRow {
@@ -242,6 +243,117 @@ impl Database {
         Ok(())
     }
 
+    pub fn dimensions(&self) -> Result<Vec<DimensionView>> {
+        load_dimensions(&self.conn)
+    }
+
+    pub fn asset_classifications(&self) -> Result<BTreeMap<String, Vec<AssetClassificationView>>> {
+        load_asset_classifications(&self.conn)
+    }
+
+    pub fn set_asset_classification(
+        &self,
+        asset_id: &str,
+        value_id: &str,
+        selected: bool,
+    ) -> Result<()> {
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM dimension_values WHERE id = ?1",
+                [value_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(GrapesError::NotFound(format!("分类值 {value_id}")));
+        }
+        if selected {
+            self.conn.execute(
+                "INSERT INTO classifications(
+                     asset_id, dimension_value_id, source, confidence, status, created_at
+                 ) VALUES (?1, ?2, 'manual', 1.0, 'accepted', ?3)
+                 ON CONFLICT(asset_id, dimension_value_id) DO UPDATE SET
+                     source = 'manual',
+                     confidence = 1.0,
+                     status = 'accepted',
+                     created_at = excluded.created_at",
+                params![asset_id, value_id, now()],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM classifications
+                 WHERE asset_id = ?1 AND dimension_value_id = ?2",
+                params![asset_id, value_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn create_custom_dimension(&self, name: &str) -> Result<DimensionView> {
+        let id = format!("dimension:{}", uuid::Uuid::new_v4());
+        let sort_order: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) + 10 FROM dimensions",
+            [],
+            |row| row.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO dimensions(id, name, kind, sort_order, system_defined)
+             VALUES (?1, ?2, 'custom', ?3, 0)",
+            params![id, name, sort_order],
+        )?;
+        Ok(DimensionView {
+            id,
+            name: name.into(),
+            kind: "custom".into(),
+            sort_order,
+            system_defined: false,
+            values: Vec::new(),
+        })
+    }
+
+    pub fn create_dimension_value(
+        &self,
+        dimension_id: &str,
+        name: &str,
+    ) -> Result<DimensionValueView> {
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM dimensions WHERE id = ?1",
+                [dimension_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(GrapesError::NotFound(format!("分类维度 {dimension_id}")));
+        }
+        let sort_order: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) + 10
+             FROM dimension_values WHERE dimension_id = ?1",
+            [dimension_id],
+            |row| row.get(0),
+        )?;
+        let id = format!("{dimension_id}:value:{}", uuid::Uuid::new_v4());
+        self.conn.execute(
+            "INSERT INTO dimension_values(
+                 id, dimension_id, parent_id, name, description, color, sort_order
+             ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4)",
+            params![id, dimension_id, name, sort_order],
+        )?;
+        Ok(DimensionValueView {
+            id,
+            dimension_id: dimension_id.into(),
+            parent_id: None,
+            name: name.into(),
+            description: None,
+            color: None,
+            sort_order,
+        })
+    }
+
     pub fn mark_interrupted_operations(&self) -> Result<usize> {
         Ok(self.conn.execute(
             "UPDATE fs_operations
@@ -272,6 +384,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         (2, include_str!("migrations/002_operations.sql")),
         (3, include_str!("migrations/003_asset_tags.sql")),
         (4, include_str!("migrations/004_graphspaces.sql")),
+        (5, include_str!("migrations/005_classifications.sql")),
     ];
 
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -338,6 +451,90 @@ pub(crate) fn load_asset_tags(conn: &Connection) -> Result<BTreeMap<String, Vec<
         .into_iter()
         .map(|(asset_id, values)| (asset_id, values.into_iter().collect()))
         .collect())
+}
+
+pub(crate) fn load_dimensions(conn: &Connection) -> Result<Vec<DimensionView>> {
+    let mut dimensions_stmt = conn.prepare(
+        "SELECT id, name, kind, sort_order, system_defined
+         FROM dimensions ORDER BY sort_order, name COLLATE NOCASE",
+    )?;
+    let mut dimensions = dimensions_stmt
+        .query_map([], |row| {
+            Ok(DimensionView {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                kind: row.get(2)?,
+                sort_order: row.get(3)?,
+                system_defined: row.get::<_, i64>(4)? != 0,
+                values: Vec::new(),
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut values_stmt = conn.prepare(
+        "SELECT id, dimension_id, parent_id, name, description, color, sort_order
+         FROM dimension_values ORDER BY sort_order, name COLLATE NOCASE",
+    )?;
+    let values = values_stmt
+        .query_map([], |row| {
+            Ok(DimensionValueView {
+                id: row.get(0)?,
+                dimension_id: row.get(1)?,
+                parent_id: row.get(2)?,
+                name: row.get(3)?,
+                description: row.get(4)?,
+                color: row.get(5)?,
+                sort_order: row.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut by_dimension: BTreeMap<String, Vec<DimensionValueView>> = BTreeMap::new();
+    for value in values {
+        by_dimension
+            .entry(value.dimension_id.clone())
+            .or_default()
+            .push(value);
+    }
+    for dimension in &mut dimensions {
+        dimension.values = by_dimension.remove(&dimension.id).unwrap_or_default();
+    }
+    Ok(dimensions)
+}
+
+pub(crate) fn load_asset_classifications(
+    conn: &Connection,
+) -> Result<BTreeMap<String, Vec<AssetClassificationView>>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.asset_id, d.id, d.name, d.kind, v.id, v.name, v.color,
+                c.source, c.confidence, c.status
+         FROM classifications c
+         JOIN dimension_values v ON v.id = c.dimension_value_id
+         JOIN dimensions d ON d.id = v.dimension_id
+         WHERE c.status = 'accepted'
+         ORDER BY d.sort_order, v.sort_order, v.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            AssetClassificationView {
+                dimension_id: row.get(1)?,
+                dimension_name: row.get(2)?,
+                dimension_kind: row.get(3)?,
+                value_id: row.get(4)?,
+                value_name: row.get(5)?,
+                color: row.get(6)?,
+                source: row.get(7)?,
+                confidence: row.get(8)?,
+                status: row.get(9)?,
+            },
+        ))
+    })?;
+    let mut result: BTreeMap<String, Vec<AssetClassificationView>> = BTreeMap::new();
+    for row in rows {
+        let (asset_id, classification) = row?;
+        result.entry(asset_id).or_default().push(classification);
+    }
+    Ok(result)
 }
 
 pub(crate) fn insert_folder_tx(tx: &Transaction<'_>, folder: &FolderRow) -> Result<()> {

@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, LoaderCircle, RefreshCw, RotateCcw } from "lucide-react";
 import {
+  createSmartGraph,
+  deleteSmartGraph,
+  getClassificationSchema,
   getGraphCatalog,
   getGraphView,
   saveGraphPosition,
 } from "../api/workspace";
-import type { AssetView, GraphInfo, GraphView } from "../bindings/types";
+import type {
+  AssetView,
+  Dimension,
+  GraphInfo,
+  GraphView,
+  SmartGraphFilter,
+} from "../bindings/types";
+import { classificationValueDisplayName } from "../classificationLabels";
 import { useI18n } from "../i18n";
 import { SigmaGraph } from "../graph/SigmaGraph";
 
@@ -30,8 +40,11 @@ export function GraphWorkspace({
   onOpenAsset: (asset: AssetView, memberIds: string[]) => void;
   onError: (message: string) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [catalog, setCatalog] = useState<GraphInfo[]>([]);
+  const [classificationDimensions, setClassificationDimensions] = useState<
+    Dimension[]
+  >([]);
   const [view, setView] = useState<GraphView | null>(null);
   const [loading, setLoading] = useState(true);
   const [layoutNonce, setLayoutNonce] = useState(0);
@@ -42,13 +55,15 @@ export function GraphWorkspace({
       const request = ++requestId.current;
       setLoading(true);
       try {
-        const [nextCatalog, nextView] = await Promise.all([
+        const [nextCatalog, nextView, nextDimensions] = await Promise.all([
           getGraphCatalog(),
           getGraphView(targetId),
+          getClassificationSchema(),
         ]);
         if (request !== requestId.current) return;
         setCatalog(nextCatalog);
         setView(nextView);
+        setClassificationDimensions(nextDimensions);
         setLayoutNonce(0);
       } catch (caught) {
         if (request === requestId.current) onError(normalizeError(caught));
@@ -112,6 +127,36 @@ export function GraphWorkspace({
     [onError, view],
   );
 
+  const createCombinedSmartGraph = useCallback(
+    async (name: string, filters: SmartGraphFilter[]) => {
+      try {
+        const graph = await createSmartGraph(name, filters);
+        onNavigate(graph.id);
+        return true;
+      } catch (caught) {
+        onError(normalizeError(caught));
+        return false;
+      }
+    },
+    [onError, onNavigate],
+  );
+
+  const deleteCombinedSmartGraph = useCallback(
+    async (id: string) => {
+      try {
+        const nextCatalog = await deleteSmartGraph(id);
+        setCatalog(nextCatalog);
+        if (graphId === id) onNavigate("graphspaces");
+        else await load(graphId);
+        return true;
+      } catch (caught) {
+        onError(normalizeError(caught));
+        return false;
+      }
+    },
+    [graphId, load, onError, onNavigate],
+  );
+
   return (
     <section className="graph-workspace">
       <header className="graph-toolbar">
@@ -149,7 +194,7 @@ export function GraphWorkspace({
                 onClick={() => onNavigate(graph.id)}
                 aria-current={graph.id === graphId ? "page" : undefined}
               >
-                {graphLabel(graph, catalog, t)}
+                {graphLabel(graph, catalog, t, locale)}
               </button>
             </span>
           ))}
@@ -162,7 +207,7 @@ export function GraphWorkspace({
           >
             {catalog.map((graph) => (
               <option key={graph.id} value={graph.id}>
-                {graphLabel(graph, catalog, t)}
+                {graphLabel(graph, catalog, t, locale)}
               </option>
             ))}
           </select>
@@ -187,7 +232,7 @@ export function GraphWorkspace({
         ) : view && view.graph.id === graphId ? (
           <>
             <div className="graph-stage-heading">
-              <strong>{graphLabel(view.graph, catalog, t)}</strong>
+              <strong>{graphLabel(view.graph, catalog, t, locale)}</strong>
               <span>
                 {t("graphNodeCount", {
                   count: view.nodes.filter((node) => !node.dummy).length,
@@ -200,9 +245,13 @@ export function GraphWorkspace({
               workspaceId={workspaceId}
               view={view}
               layoutNonce={layoutNonce}
+              classificationDimensions={classificationDimensions}
+              smartGraphs={catalog.filter((graph) => graph.kind === "smart")}
               onNavigate={onNavigate}
               onOpenAsset={openAssetById}
               onSavePositions={savePositions}
+              onCreateSmartGraph={createCombinedSmartGraph}
+              onDeleteSmartGraph={deleteCombinedSmartGraph}
             />
             {!view.nodes.some((node) => !node.dummy) && (
               <div className="graph-empty graph-empty-overlay">
@@ -225,29 +274,57 @@ export function GraphWorkspace({
           {t("graphRoot")}
         </span>
         <span>
-          <i className="portal-dot" />
-          {t("portalNode")}
+          <i className="family-dot capture" />
+          {t("graphCaptureGroup")}
+        </span>
+        <span>
+          <i className="family-dot classification" />
+          {t("graphClassificationGroup")}
+        </span>
+        <span>
+          <i className="family-dot tag" />
+          {t("graphTagGroup")}
         </span>
         <span>
           <i className="asset-dot" />
           {t("photoNode")}
         </span>
-        <span>{t("graphHint")}</span>
       </footer>
     </section>
   );
 }
 
-function graphLabel(graph: GraphInfo, catalog: GraphInfo[], t: Translator) {
+function graphLabel(
+  graph: GraphInfo,
+  catalog: GraphInfo[],
+  t: Translator,
+  locale: ReturnType<typeof useI18n>["locale"],
+) {
   if (graph.kind === "root") return "GraphSpaces";
   const dimension = graph.dimension
-    ? dimensionLabel(graph.dimension, t)
+    ? dimensionDisplay(graph.dimension, graph.name, t)
     : graph.name;
   if (graph.kind === "value") {
     const parent = catalog.find((item) => item.id === graph.parentId);
-    return `${parent?.dimension ? dimensionLabel(parent.dimension, t) : dimension} · ${graph.name}`;
+    const parentLabel = parent?.dimension
+      ? dimensionDisplay(parent.dimension, parent.name, t)
+      : dimension;
+    return `${parentLabel} · ${classificationValueDisplayName(
+      graph.dimensionValue ?? "",
+      graph.name,
+      locale,
+    )}`;
   }
   return dimension;
+}
+
+function dimensionDisplay(
+  dimension: string,
+  fallback: string,
+  t: Translator,
+) {
+  const translated = dimensionLabel(dimension, t);
+  return translated === dimension ? fallback : translated;
 }
 
 export function dimensionLabel(dimension: string, t: Translator) {
@@ -261,6 +338,7 @@ export function dimensionLabel(dimension: string, t: Translator) {
     lens: "dimensionLens",
     tone: "dimensionTone",
     custom: "dimensionCustom",
+    tags: "dimensionTags",
   } as const;
   const key = keys[dimension as keyof typeof keys];
   return key ? t(key) : dimension;

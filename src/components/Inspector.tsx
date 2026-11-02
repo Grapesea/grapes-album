@@ -14,10 +14,11 @@ import {
   Timer,
   X,
 } from "lucide-react";
-import type { AssetView, FolderView } from "../bindings/types";
+import type { AssetView, Dimension, FolderView } from "../bindings/types";
 import { useI18n } from "../i18n";
 import { absoluteWorkspacePath } from "../utils/paths";
 import { Histogram } from "./Histogram";
+import { ClassificationEditor } from "./ClassificationEditor";
 
 interface InspectorProps {
   asset: AssetView | null;
@@ -25,6 +26,18 @@ interface InspectorProps {
   assetCount: number;
   folderCount: number;
   workspaceRootPath: string;
+  classificationSchema: Dimension[];
+  classificationBusy: boolean;
+  onSetClassification: (
+    assetId: string,
+    valueId: string,
+    selected: boolean,
+  ) => Promise<boolean>;
+  onCreateClassificationDimension: (name: string) => Promise<boolean>;
+  onCreateClassificationValue: (
+    dimensionId: string,
+    name: string,
+  ) => Promise<boolean>;
   tagBusy: boolean;
   onSetTags: (tags: string[]) => Promise<boolean>;
 }
@@ -35,6 +48,11 @@ export function Inspector({
   assetCount,
   folderCount,
   workspaceRootPath,
+  classificationSchema,
+  classificationBusy,
+  onSetClassification,
+  onCreateClassificationDimension,
+  onCreateClassificationValue,
   tagBusy,
   onSetTags,
 }: InspectorProps) {
@@ -78,18 +96,7 @@ export function Inspector({
       <aside className="inspector">
         <div className="inspector-header">
           <div>
-            <h2>{t("photoProperties")}</h2>
-          </div>
-        </div>
-
-        <div className="inspector-hero">
-          <div className="file-preview">
-            <ImageIcon size={28} />
-            <span>{extensionOf(asset.filename)}</span>
-          </div>
-          <div>
-            <strong>{asset.filename}</strong>
-            <p>{asset.relativePath}</p>
+            <h3>{t("photoProperties")}: {(asset.filename)}</h3>
           </div>
         </div>
 
@@ -97,7 +104,7 @@ export function Inspector({
           <Histogram asset={asset} />
         </InspectorSection>
 
-        <InspectorSection title={t("tags")}>
+        <InspectorSection title={t("tags")} className="flush-inspector-section">
           <div className="tag-manager">
             {asset.tags.length === 0 ? (
               <span className="tag-empty">{t("noTagsYet")}</span>
@@ -131,7 +138,10 @@ export function Inspector({
           </div>
         </InspectorSection>
 
-        <InspectorSection title={t("fileInfo")}>
+        <InspectorSection
+          title={t("fileInfo")}
+          className="flush-inspector-section"
+        >
           <InfoRow
             icon={<MapPin size={14} />}
             label={t("location")}
@@ -155,7 +165,10 @@ export function Inspector({
         </InspectorSection>
 
         {hasCaptureDetails && (
-          <InspectorSection title={t("cameraMetadata")}>
+          <InspectorSection
+            title={t("cameraMetadata")}
+            className="flush-inspector-section"
+          >
             {cameraName && (
               <InfoRow
                 icon={<Camera size={14} />}
@@ -222,6 +235,37 @@ export function Inspector({
           </InspectorSection>
         )}
 
+        <InspectorSection
+          title={t("classifications")}
+          className="classification-section"
+          action={
+            <button
+              type="button"
+              className="classification-title-action"
+              disabled={classificationBusy}
+              onClick={async () => {
+                const name = window.prompt(t("newDimensionPrompt"));
+                if (name) {
+                  await onCreateClassificationDimension(name);
+                }
+              }}
+            >
+              <Plus size={11} />
+              {t("addDimension")}
+            </button>
+          }
+        >
+          <ClassificationEditor
+            classifications={asset.classifications}
+            dimensions={classificationSchema}
+            busy={classificationBusy}
+            onToggle={(valueId, selected) =>
+              onSetClassification(asset.id, valueId, selected)
+            }
+            onCreateValue={onCreateClassificationValue}
+          />
+        </InspectorSection>
+
       </aside>
     );
   }
@@ -231,22 +275,7 @@ export function Inspector({
       <aside className="inspector">
         <div className="inspector-header">
           <div>
-            <h2>{t("folder")}</h2>
-          </div>
-        </div>
-
-        <div className="inspector-hero">
-          <div className="file-preview folder-preview">
-            <Folder size={28} />
-          </div>
-          <div>
-            <strong>{folder.name}</strong>
-            <p>
-              {absoluteWorkspacePath(
-                workspaceRootPath,
-                folder.relativePath,
-              )}
-            </p>
+            <h2>{t("folder")}: {folder.name}</h2>
           </div>
         </div>
 
@@ -272,14 +301,21 @@ export function Inspector({
 
 function InspectorSection({
   title,
+  className = "",
+  action,
   children,
 }: {
   title: string;
+  className?: string;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <section className="inspector-section">
-      <h3>{title}</h3>
+    <section className={`inspector-section ${className}`.trim()}>
+      <div className="inspector-section-heading">
+        <h3>{title}</h3>
+        {action}
+      </div>
       <div className="inspector-section-body">{children}</div>
     </section>
   );

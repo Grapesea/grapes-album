@@ -32,7 +32,10 @@ import {
 import {
   chooseWorkspace,
   createFolder,
+  createCustomDimension,
+  createDimensionValue,
   desktopRuntime,
+  getClassificationSchema,
   getWorkspaceSnapshot,
   moveAsset,
   moveFolder,
@@ -40,11 +43,13 @@ import {
   reconcileWorkspace,
   renameAsset,
   renameFolder,
+  setAssetClassification,
   setAssetTags,
 } from "./api/workspace";
 import type {
   AssetView,
   DragPayload,
+  Dimension,
   FolderView,
   ReconcileReport,
   WorkspaceSnapshot,
@@ -55,6 +60,10 @@ import { AssetTags } from "./components/AssetTags";
 import { AssetThumbnail } from "./components/AssetThumbnail";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { useI18n } from "./i18n";
+import {
+  classificationValueDisplayName,
+  dimensionDisplayName,
+} from "./classificationLabels";
 import { VirtualGallery } from "./components/VirtualGallery";
 import { PhotoWorkspace } from "./components/PhotoWorkspace";
 import { absoluteWorkspacePath } from "./utils/paths";
@@ -97,6 +106,10 @@ export default function App() {
   const [graphPhotoIds, setGraphPhotoIds] = useState<string[]>([]);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
+  const [classificationSchema, setClassificationSchema] = useState<Dimension[]>(
+    [],
+  );
+  const [graphRevision, setGraphRevision] = useState(0);
 
   useEffect(() => {
     setGraphId("graphspaces");
@@ -168,6 +181,21 @@ export default function App() {
     window.addEventListener("resize", clampToWindow);
     return () => window.removeEventListener("resize", clampToWindow);
   }, [leftSidebarWidth, rightSidebarWidth]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    let disposed = false;
+    getClassificationSchema()
+      .then((schema) => {
+        if (!disposed) setClassificationSchema(schema);
+      })
+      .catch((caught) => {
+        if (!disposed) setError(normalizeError(caught, t("operationFailed")));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [snapshot?.workspace.id, t]);
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot) => {
     setSnapshot(next);
@@ -413,6 +441,55 @@ export default function App() {
     setPhotoOpen(true);
   };
 
+  const createClassificationDimension = async (name: string) => {
+    if (busy) return false;
+    setBusy(t("creatingDimension"));
+    setError(null);
+    try {
+      setClassificationSchema(await createCustomDimension(name));
+      setGraphRevision((value) => value + 1);
+      return true;
+    } catch (caught) {
+      setError(normalizeError(caught, t("operationFailed")));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const addClassificationValue = async (
+    dimensionId: string,
+    name: string,
+  ) => {
+    if (busy) return false;
+    setBusy(t("creatingClassificationValue"));
+    setError(null);
+    try {
+      setClassificationSchema(
+        await createDimensionValue(dimensionId, name),
+      );
+      setGraphRevision((value) => value + 1);
+      return true;
+    } catch (caught) {
+      setError(normalizeError(caught, t("operationFailed")));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const updateClassification = async (
+    assetId: string,
+    valueId: string,
+    selected: boolean,
+  ) => {
+    const updated = await run(t("updatingClassification"), () =>
+      setAssetClassification(assetId, valueId, selected),
+    );
+    if (updated) setGraphRevision((value) => value + 1);
+    return updated;
+  };
+
   if (!snapshot) {
     return (
       <div className="welcome-shell">
@@ -475,18 +552,6 @@ export default function App() {
             placeholder={t("filterPlaceholder")}
           />
         </label>
-        <button
-          type="button"
-          className="ghost-button graph-button"
-          onClick={() => {
-            setGraphOpen(true);
-            setPhotoOpen(false);
-          }}
-        >
-          <GitBranch size={15} />
-          GraphSpaces
-          <span>P2</span>
-        </button>
         <LanguageSwitcher />
         <button
           type="button"
@@ -632,9 +697,7 @@ export default function App() {
                 workspaceId={snapshot.workspace.id}
                 assets={snapshot.assets}
                 refreshToken={
-                  watcherReport?.finishedAt ??
-                  snapshot.lastReconcile?.finishedAt ??
-                  snapshot.workspace.createdAt
+                `${watcherReport?.finishedAt ?? snapshot.lastReconcile?.finishedAt ?? snapshot.workspace.createdAt}:${graphRevision}`
                 }
                 onClose={() => setGraphOpen(false)}
                 onOpenAsset={openGraphAsset}
@@ -757,6 +820,7 @@ export default function App() {
               <div className="asset-table-header" role="row">
                 <span>{t("name")}</span>
                 <span>{t("tags")}</span>
+                <span>{t("classifications")}</span>
                 <span>{t("modified")}</span>
                 <span>{t("size")}</span>
               </div>
@@ -783,10 +847,14 @@ export default function App() {
                     <AssetThumbnail asset={asset} />
                     <span>
                       <strong>{asset.filename}</strong>
-                      <small>{asset.relativePath}</small>
                     </span>
                   </span>
                   <AssetTags tags={asset.tags} />
+                  <AssetClassifications
+                    asset={asset}
+                    locale={locale}
+                    unclassified={t("unclassified")}
+                  />
                   <span className="asset-modified">
                     {formatModifiedAt(asset.mtimeNs, locale, t("unknown"))}
                   </span>
@@ -818,12 +886,19 @@ export default function App() {
           }
           folderCount={childFolders.length}
           workspaceRootPath={snapshot.workspace.rootPath}
+          classificationSchema={classificationSchema}
+          classificationBusy={busy !== null}
+          onSetClassification={updateClassification}
+          onCreateClassificationDimension={createClassificationDimension}
+          onCreateClassificationValue={addClassificationValue}
           tagBusy={busy !== null}
           onSetTags={async (tags) => {
             if (!selectedAsset) return false;
-            return run(t("updatingTags"), () =>
+            const updated = await run(t("updatingTags"), () =>
               setAssetTags(selectedAsset.id, tags),
             );
+            if (updated) setGraphRevision((value) => value + 1);
+            return updated;
           }}
         />
       </div>
@@ -930,6 +1005,63 @@ function Stat({
         <small>{label}</small>
       </span>
     </div>
+  );
+}
+
+function AssetClassifications({
+  asset,
+  locale,
+  unclassified,
+}: {
+  asset: AssetView;
+  locale: "zh" | "en";
+  unclassified: string;
+}) {
+  if (asset.classifications.length === 0) {
+    return (
+      <span className="asset-classifications empty">{unclassified}</span>
+    );
+  }
+
+  const labels = asset.classifications.map((classification) => {
+    const dimension = dimensionDisplayName(
+      classification.dimensionId,
+      classification.dimensionName,
+      locale,
+    );
+    const value = classificationValueDisplayName(
+      classification.valueId,
+      classification.valueName,
+      locale,
+    );
+    return {
+      ...classification,
+      label: `${dimension}: ${value}`,
+      dimension,
+      value,
+    };
+  });
+  const visible = labels.slice(0, 2);
+  const hiddenCount = labels.length - visible.length;
+
+  return (
+    <span
+      className="asset-classifications"
+      title={labels.map(({ label }) => label).join(" · ")}
+    >
+      {visible.map(({ dimensionId, valueId, dimension, value }) => (
+        <span
+          className="asset-classification"
+          key={`${dimensionId}:${valueId}`}
+        >
+          <small>{dimension}</small>
+          <strong>{value}</strong>
+        </span>
+      ))}
+      {hiddenCount > 0 && (
+        <span className="asset-classification-more">+{hiddenCount}</span>
+      )}
+    </span>
   );
 }
 

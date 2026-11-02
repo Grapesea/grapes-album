@@ -7,11 +7,13 @@ export function AssetTags({
   limit = 2,
   adaptive = false,
   moreLabel,
+  availableWidth,
 }: {
   tags: string[];
   limit?: number;
   adaptive?: boolean;
   moreLabel?: string;
+  availableWidth?: number;
 }) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLSpanElement>(null);
@@ -31,7 +33,7 @@ export function AssetTags({
     if (!container || !measure) return;
 
     const recalculate = () => {
-      const available = container.clientWidth;
+      const available = availableWidth ?? container.clientWidth;
       if (available <= 0) return;
 
       const pills = Array.from(measure.children).filter(
@@ -66,8 +68,15 @@ export function AssetTags({
     recalculate();
     const observer = new ResizeObserver(recalculate);
     observer.observe(container);
-    return () => observer.disconnect();
-  }, [adaptive, limit, tags]);
+    let disposed = false;
+    void document.fonts?.ready.then(() => {
+      if (!disposed) recalculate();
+    });
+    return () => {
+      disposed = true;
+      observer.disconnect();
+    };
+  }, [adaptive, availableWidth, limit, tags]);
 
   if (tags.length === 0) {
     return <span className="tag-empty">{t("noTags")}</span>;

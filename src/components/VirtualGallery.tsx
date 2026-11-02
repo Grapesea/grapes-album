@@ -105,6 +105,9 @@ export function VirtualGallery({
                       limit={compact ? 1 : undefined}
                       adaptive={!compact}
                       moreLabel={compact ? undefined : "+1"}
+                      availableWidth={
+                        compact ? undefined : Math.max(0, cardWidth - 20)
+                      }
                     />
                   </span>
                 </button>

@@ -1527,6 +1527,14 @@ code,
   pointer-events: none;
 }
 
+.asset-tags-measure .tag-pill {
+  flex: 0 0 auto;
+}
+
+.asset-tags.adaptive > .tag-pill {
+  flex: 0 1 auto;
+}
+
 .tag-pill {
   display: inline-flex;
   min-width: 0;

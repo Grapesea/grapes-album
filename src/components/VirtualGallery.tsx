@@ -6,18 +6,21 @@ import { AssetTags } from "./AssetTags";
 import { AssetThumbnail } from "./AssetThumbnail";
 
 const GAP = 12;
-const MIN_CARD_WIDTH = 168;
+const MEDIUM_CARD_WIDTH = 168;
+const SMALL_CARD_WIDTH = 126;
 
 export function VirtualGallery({
   assets,
   selectedAssetId,
   onSelect,
   onOpen,
+  compact = false,
 }: {
   assets: AssetView[];
   selectedAssetId: string | null;
   onSelect: (asset: AssetView) => void;
   onOpen: (asset: AssetView) => void;
+  compact?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(720);
@@ -34,10 +37,13 @@ export function VirtualGallery({
 
   const columns = Math.max(
     1,
-    Math.floor((width + GAP) / (MIN_CARD_WIDTH + GAP)),
+    Math.floor(
+      (width + GAP) /
+        ((compact ? SMALL_CARD_WIDTH : MEDIUM_CARD_WIDTH) + GAP),
+    ),
   );
   const cardWidth = (width - GAP * (columns - 1)) / columns;
-  const cardHeight = cardWidth * 0.7 + 76;
+  const cardHeight = cardWidth * 0.7 + (compact ? 54 : 76);
   const rowCount = Math.ceil(assets.length / columns);
 
   const virtualizer = useVirtualizer({
@@ -69,7 +75,7 @@ export function VirtualGallery({
               {rowAssets.map((asset) => (
                 <button
                   type="button"
-                  className={`gallery-card ${
+                  className={`gallery-card ${compact ? "compact" : ""} ${
                     selectedAssetId === asset.id ? "selected" : ""
                   }`}
                   key={asset.id}

@@ -18,8 +18,6 @@ import {
   FolderPlus,
   GitBranch,
   HardDrive,
-  LayoutGrid,
-  List,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -67,7 +65,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  const [viewMode, setViewMode] = useState<"gallery" | "list">("gallery");
   const [folderView, setFolderView] = useState<
     "medium" | "small" | "details"
   >("medium");
@@ -542,26 +539,6 @@ export default function App() {
               >
                 <Pencil size={15} />
               </button>
-              <button
-                type="button"
-                className={`secondary-button view-mode-button ${
-                  viewMode === "gallery" ? "active" : ""
-                }`}
-                title={t("showGallery")}
-                onClick={() => setViewMode("gallery")}
-              >
-                <LayoutGrid size={15} />
-              </button>
-              <button
-                type="button"
-                className={`secondary-button view-mode-button ${
-                  viewMode === "list" ? "active" : ""
-                }`}
-                title={t("showList")}
-                onClick={() => setViewMode("list")}
-              >
-                <List size={15} />
-              </button>
             </div>
           </div>
 
@@ -663,7 +640,7 @@ export default function App() {
             <div className="table-heading">
               <div>
                 <h2>
-                  {viewMode === "gallery" ? t("gallery") : t("fileList")}
+                  {folderView === "details" ? t("fileList") : t("gallery")}
                 </h2>
               </div>
               {watcherOnline && (
@@ -685,12 +662,13 @@ export default function App() {
                   {filter ? t("clearFilter") : t("emptyFolderHint")}
                 </p>
               </div>
-            ) : viewMode === "gallery" ? (
+            ) : folderView !== "details" ? (
               <VirtualGallery
                 assets={currentAssets}
                 selectedAssetId={selectedAssetId}
                 onSelect={selectAsset}
                 onOpen={openPhoto}
+                compact={folderView === "small"}
               />
             ) : (
               <div className="asset-table" role="table">

@@ -1376,6 +1376,18 @@ code,
   white-space: nowrap;
 }
 
+.gallery-card.compact .gallery-card-info {
+  padding: 6px 7px;
+}
+
+.gallery-card.compact .gallery-card-meta {
+  display: none;
+}
+
+.gallery-card.compact .tag-pill {
+  max-width: 88px;
+}
+
 .gallery-card-meta {
   display: flex;
   min-width: 0;

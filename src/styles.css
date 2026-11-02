@@ -862,6 +862,17 @@ body.sidebar-resizing {
     #121015;
 }
 
+.graph-loading {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
 .graph-toolbar {
   display: flex;
   min-width: 0;
@@ -1007,6 +1018,26 @@ body.sidebar-resizing {
 
 .graph-hover-card small {
   color: var(--violet-light);
+}
+
+.graph-pin-button {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 3px;
+  padding: 4px 7px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 7px;
+}
+
+.graph-pin-button:hover {
+  border-color: rgba(229, 200, 120, 0.35);
+  color: #e5c878;
 }
 
 .graph-empty {

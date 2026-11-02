@@ -46,12 +46,15 @@ fn initializes_sidecar_and_database_migrations() {
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
              WHERE type = 'table'
-               AND name IN ('folders', 'assets', 'fs_operations', 'asset_tags')",
+               AND name IN (
+                   'folders', 'assets', 'fs_operations', 'asset_tags',
+                   'graphs', 'graph_manual_members', 'graph_positions'
+               )",
             [],
             |row| row.get(0),
         )
         .expect("table count");
-    assert_eq!(table_count, 4);
+    assert_eq!(table_count, 7);
 }
 
 #[test]

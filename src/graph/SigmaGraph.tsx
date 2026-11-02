@@ -1,27 +1,74 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Graph from "graphology";
+import FA2Layout from "graphology-layout-forceatlas2/worker";
 import {
   SigmaContainer,
   useRegisterEvents,
   useSigma,
 } from "@react-sigma/core";
+import { Pin, PinOff } from "lucide-react";
 import type { GraphNode, GraphView } from "../bindings/types";
+import { useI18n } from "../i18n";
+
+interface SavedPosition {
+  nodeKey: string;
+  x: number;
+  y: number;
+  pinned: boolean;
+}
 
 interface SigmaGraphProps {
   view: GraphView;
+  layoutNonce: number;
   onNavigate: (graphId: string) => void;
   onSelectAsset: (assetId: string) => void;
   onOpenAsset: (assetId: string) => void;
+  onSavePositions: (positions: SavedPosition[]) => Promise<void>;
 }
 
 export function SigmaGraph({
   view,
+  layoutNonce,
   onNavigate,
   onSelectAsset,
   onOpenAsset,
+  onSavePositions,
 }: SigmaGraphProps) {
+  const { t } = useI18n();
   const [hovered, setHovered] = useState<GraphNode | null>(null);
-  const graph = useMemo(() => createGraphologyGraph(view), [view]);
+  const graph = useMemo(
+    () => createGraphologyGraph(view, (node) => displayNodeLabel(node, t)),
+    [t, view],
+  );
+  const [pinnedNodes, setPinnedNodes] = useState<Set<string>>(
+    () => new Set(view.nodes.filter((node) => node.pinned).map((node) => node.id)),
+  );
+
+  useEffect(() => {
+    setPinnedNodes(
+      new Set(view.nodes.filter((node) => node.pinned).map((node) => node.id)),
+    );
+  }, [view]);
+
+  const togglePin = async (node: GraphNode) => {
+    if (!graph.hasNode(node.id)) return;
+    const pinned = !graph.getNodeAttribute(node.id, "fixed");
+    graph.setNodeAttribute(node.id, "fixed", pinned);
+    setPinnedNodes((current) => {
+      const next = new Set(current);
+      if (pinned) next.add(node.id);
+      else next.delete(node.id);
+      return next;
+    });
+    await onSavePositions([
+      {
+        nodeKey: node.id,
+        x: graph.getNodeAttribute(node.id, "x"),
+        y: graph.getNodeAttribute(node.id, "y"),
+        pinned,
+      },
+    ]);
+  };
 
   return (
     <div className="sigma-graph-shell">
@@ -32,7 +79,11 @@ export function SigmaGraph({
           settings: {
             renderEdgeLabels: false,
             enableEdgeEvents: false,
-            enableNodeDrag: false,
+            enableNodeDrag: true,
+            dragPositionToAttributes: (position) => ({
+              x: position.x,
+              y: position.y,
+            }),
             labelDensity: 0.25,
             labelGridCellSize: 90,
             labelRenderedSizeThreshold: 1,
@@ -46,22 +97,29 @@ export function SigmaGraph({
               return {
                 ...attributes,
                 color: "#5d5563",
-                label: "",
               };
             }
             if (data.kind === "asset") {
               return {
                 ...attributes,
-                color: hovered?.id === node ? "#d6c7ff" : "#7fcfaa",
+                color: pinnedNodes.has(node)
+                  ? "#e5c878"
+                  : hovered?.id === node
+                    ? "#d6c7ff"
+                    : "#7fcfaa",
                 size: hovered?.id === node ? 10 : 7,
                 label: "",
               };
             }
             return {
               ...attributes,
-              color: hovered?.id === node ? "#d8c8ff" : data.id === "portal:graphspaces"
-                ? "#b99aff"
-                : "#aa8aff",
+              color: pinnedNodes.has(node)
+                ? "#e5c878"
+                : hovered?.id === node
+                  ? "#d8c8ff"
+                  : data.id === "portal:graphspaces"
+                    ? "#b99aff"
+                    : "#aa8aff",
               size: hovered?.id === node ? 24 : 18,
             };
           },
@@ -69,17 +127,36 @@ export function SigmaGraph({
       >
         <GraphEvents
           view={view}
+          graph={graph}
+          layoutNonce={layoutNonce}
           onHover={setHovered}
           onNavigate={onNavigate}
           onSelectAsset={onSelectAsset}
           onOpenAsset={onOpenAsset}
+          onSavePositions={onSavePositions}
         />
       </SigmaContainer>
       {hovered && (
         <div className="graph-hover-card">
-          <strong>{hovered.label}</strong>
-          {hovered.subtitle && <span>{hovered.subtitle}</span>}
+          <strong>{displayNodeLabel(hovered, t)}</strong>
+          {hovered.kind === "portal" && hovered.photoCount > 0 ? (
+            <span>{t("photoCount", { count: hovered.photoCount })}</span>
+          ) : (
+            hovered.subtitle && <span>{hovered.subtitle}</span>
+          )}
           {!hovered.available && <small>P3</small>}
+          <button
+            type="button"
+            className="graph-pin-button"
+            onClick={() => void togglePin(hovered)}
+          >
+            {pinnedNodes.has(hovered.id) ? (
+              <PinOff size={11} />
+            ) : (
+              <Pin size={11} />
+            )}
+            {pinnedNodes.has(hovered.id) ? "Unpin" : "Pin"}
+          </button>
         </div>
       )}
     </div>
@@ -88,15 +165,54 @@ export function SigmaGraph({
 
 function GraphEvents({
   view,
+  graph,
+  layoutNonce,
   onHover,
   onNavigate,
   onSelectAsset,
   onOpenAsset,
+  onSavePositions,
 }: SigmaGraphProps & {
+  graph: Graph;
   onHover: (node: GraphNode | null) => void;
 }) {
   const sigma = useSigma();
   const registerEvents = useRegisterEvents();
+  const layoutRef = useRef<FA2Layout | null>(null);
+
+  useEffect(() => {
+    const hasSavedLayout = view.nodes.every(
+      (node) => node.x != null && node.y != null,
+    );
+    if (hasSavedLayout && layoutNonce === 0) return;
+
+    const layout = new FA2Layout(graph, {
+      settings: {
+        gravity: 1,
+        scalingRatio: 12,
+        slowDown: 1,
+        barnesHutOptimize: graph.order > 80,
+      },
+    });
+    layoutRef.current = layout;
+    layout.start();
+    const timeout = window.setTimeout(() => {
+      layout.stop();
+      const positions = graph.mapNodes((node) => ({
+        nodeKey: node,
+        x: graph.getNodeAttribute(node, "x"),
+        y: graph.getNodeAttribute(node, "y"),
+        pinned: Boolean(graph.getNodeAttribute(node, "fixed")),
+      }));
+      void onSavePositions(positions);
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timeout);
+      layout.kill();
+      if (layoutRef.current === layout) layoutRef.current = null;
+    };
+  }, [graph, layoutNonce, onSavePositions, view]);
 
   useEffect(() => {
     registerEvents({
@@ -118,8 +234,29 @@ function GraphEvents({
           onOpenAsset(selected.assetId);
         }
       },
+      nodeDragStart: () => {
+        layoutRef.current?.stop();
+      },
+      nodeDragEnd: ({ node }) => {
+        const position: SavedPosition = {
+          nodeKey: node,
+          x: graph.getNodeAttribute(node, "x"),
+          y: graph.getNodeAttribute(node, "y"),
+          pinned: Boolean(graph.getNodeAttribute(node, "fixed")),
+        };
+        void onSavePositions([position]);
+      },
     });
-  }, [onHover, onNavigate, onOpenAsset, onSelectAsset, registerEvents, view]);
+  }, [
+    graph,
+    onHover,
+    onNavigate,
+    onOpenAsset,
+    onSavePositions,
+    onSelectAsset,
+    registerEvents,
+    view,
+  ]);
 
   useEffect(() => {
     sigma.getCamera().animate(
@@ -131,7 +268,10 @@ function GraphEvents({
   return null;
 }
 
-function createGraphologyGraph(view: GraphView) {
+function createGraphologyGraph(
+  view: GraphView,
+  getLabel: (node: GraphNode) => string,
+) {
   const graph = new Graph();
   const portals = view.nodes.filter((node) => node.kind === "portal");
   const assets = view.nodes.filter((node) => node.kind === "asset");
@@ -169,7 +309,7 @@ function createGraphologyGraph(view: GraphView) {
     graph.addNode(node.id, {
       x,
       y,
-      label: node.label,
+      label: getLabel(node),
       size:
         node.kind === "asset"
           ? 7
@@ -178,6 +318,7 @@ function createGraphologyGraph(view: GraphView) {
             : 17,
       color: node.available ? "#aa8aff" : "#5d5563",
       nodeKind: node.kind,
+      fixed: node.pinned,
     });
   }
 
@@ -194,5 +335,30 @@ function createGraphologyGraph(view: GraphView) {
     }
   }
   return graph;
+}
+
+function displayNodeLabel(
+  node: GraphNode,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  const id = node.id;
+  const dimension = id.startsWith("portal:graph:dimension:")
+    ? id.slice("portal:graph:dimension:".length)
+    : id.startsWith("portal:") && !id.includes(":graph:")
+      ? id.slice("portal:".length)
+      : "";
+  const keys = {
+    date: "dimensionDate",
+    time: "dimensionTime",
+    weather: "dimensionWeather",
+    location: "dimensionLocation",
+    type: "dimensionType",
+    camera: "dimensionCamera",
+    lens: "dimensionLens",
+    tone: "dimensionTone",
+    custom: "dimensionCustom",
+  } as const;
+  const key = keys[dimension as keyof typeof keys];
+  return key ? t(key) : node.label;
 }
 

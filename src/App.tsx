@@ -5,6 +5,8 @@ import {
   useMemo,
   useRef,
   useState,
+  lazy,
+  Suspense,
 } from "react";
 import type { ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -57,7 +59,11 @@ import { VirtualGallery } from "./components/VirtualGallery";
 import { PhotoWorkspace } from "./components/PhotoWorkspace";
 import { absoluteWorkspacePath } from "./utils/paths";
 import { SidebarResizer } from "./components/SidebarResizer";
-import { GraphWorkspace } from "./components/GraphWorkspace";
+const GraphWorkspace = lazy(() =>
+  import("./components/GraphWorkspace").then((module) => ({
+    default: module.GraphWorkspace,
+  })),
+);
 
 const LEFT_SIDEBAR_MIN = 190;
 const RIGHT_SIDEBAR_MIN = 230;
@@ -601,18 +607,27 @@ export default function App() {
               onClose={() => setPhotoOpen(false)}
             />
           ) : graphOpen ? (
-            <GraphWorkspace
-              assets={snapshot.assets}
-              refreshToken={
-                watcherReport?.finishedAt ??
-                snapshot.lastReconcile?.finishedAt ??
-                snapshot.workspace.createdAt
+            <Suspense
+              fallback={
+                <div className="graph-loading">
+                  <LoaderCircle size={20} className="spin" />
+                  {t("graphLoading")}
+                </div>
               }
-              onClose={() => setGraphOpen(false)}
-              onSelectAsset={selectGraphAsset}
-              onOpenAsset={openGraphAsset}
-              onError={setError}
-            />
+            >
+              <GraphWorkspace
+                assets={snapshot.assets}
+                refreshToken={
+                  watcherReport?.finishedAt ??
+                  snapshot.lastReconcile?.finishedAt ??
+                  snapshot.workspace.createdAt
+                }
+                onClose={() => setGraphOpen(false)}
+                onSelectAsset={selectGraphAsset}
+                onOpenAsset={openGraphAsset}
+                onError={setError}
+              />
+            </Suspense>
           ) : (
             <>
           <div className="content-toolbar">

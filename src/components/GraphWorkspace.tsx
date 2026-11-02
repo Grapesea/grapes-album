@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, RefreshCw } from "lucide-react";
-import { getGraphCatalog, getGraphView } from "../api/workspace";
+import { ArrowLeft, RefreshCw, RotateCcw } from "lucide-react";
+import {
+  getGraphCatalog,
+  getGraphView,
+  saveGraphPosition,
+} from "../api/workspace";
 import type {
   AssetView,
   GraphInfo,
@@ -32,6 +36,7 @@ export function GraphWorkspace({
   const [view, setView] = useState<GraphView | null>(null);
   const [graphId, setGraphId] = useState(ROOT_GRAPH_ID);
   const [loading, setLoading] = useState(true);
+  const [layoutNonce, setLayoutNonce] = useState(0);
 
   const load = useCallback(
     async (targetId: string) => {
@@ -44,6 +49,7 @@ export function GraphWorkspace({
         setCatalog(nextCatalog);
         setView(nextView);
         setGraphId(nextView.graph.id);
+        setLayoutNonce(0);
       } catch (caught) {
         onError(normalizeError(caught));
       } finally {
@@ -73,9 +79,47 @@ export function GraphWorkspace({
     else onClose();
   };
 
+  const savePositions = useCallback(
+    async (
+      positions: Array<{
+        nodeKey: string;
+        x: number;
+        y: number;
+        pinned: boolean;
+      }>,
+    ) => {
+      if (!view) return;
+      try {
+        await Promise.all(
+          positions.map((position) =>
+            saveGraphPosition(
+              view.graph.id,
+              position.nodeKey,
+              position.x,
+              position.y,
+              position.pinned,
+            ),
+          ),
+        );
+      } catch (caught) {
+        onError(normalizeError(caught));
+      }
+    },
+    [onError, view],
+  );
+
   return (
     <section className="graph-workspace">
       <header className="graph-toolbar">
+        <button
+          type="button"
+          className="icon-button"
+          title={t("graphRelayout")}
+          onClick={() => setLayoutNonce((nonce) => nonce + 1)}
+          disabled={loading}
+        >
+          <RotateCcw size={15} />
+        </button>
         <button
           type="button"
           className="graph-back-button"
@@ -126,9 +170,11 @@ export function GraphWorkspace({
         {view && view.nodes.length > 0 ? (
           <SigmaGraph
             view={view}
+            layoutNonce={layoutNonce}
             onNavigate={setGraphId}
             onSelectAsset={selectAssetById}
             onOpenAsset={openAssetById}
+            onSavePositions={savePositions}
           />
         ) : (
           <div className="graph-empty">

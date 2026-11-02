@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { AssetView, FolderView } from "../bindings/types";
 import { useI18n } from "../i18n";
+import { absoluteWorkspacePath } from "../utils/paths";
 import { Histogram } from "./Histogram";
 
 interface InspectorProps {
@@ -23,6 +24,7 @@ interface InspectorProps {
   folder: FolderView | null;
   assetCount: number;
   folderCount: number;
+  workspaceRootPath: string;
   tagBusy: boolean;
   onSetTags: (tags: string[]) => Promise<boolean>;
 }
@@ -32,6 +34,7 @@ export function Inspector({
   folder,
   assetCount,
   folderCount,
+  workspaceRootPath,
   tagBusy,
   onSetTags,
 }: InspectorProps) {
@@ -240,7 +243,12 @@ export function Inspector({
           </div>
           <div>
             <strong>{folder.name}</strong>
-            <p>{folder.relativePath || t("workspaceRoot")}</p>
+            <p>
+              {absoluteWorkspacePath(
+                workspaceRootPath,
+                folder.relativePath,
+              )}
+            </p>
           </div>
         </div>
 

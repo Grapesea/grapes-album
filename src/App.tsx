@@ -54,6 +54,7 @@ import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { useI18n } from "./i18n";
 import { VirtualGallery } from "./components/VirtualGallery";
 import { PhotoWorkspace } from "./components/PhotoWorkspace";
+import { absoluteWorkspacePath } from "./utils/paths";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -547,8 +548,10 @@ export default function App() {
               <h3>
                 {searchActive
                   ? t("searchSummary", { count: currentAssets.length })
-                  : currentFolder?.relativePath ||
-                    snapshot.workspace.rootPath}
+                  : absoluteWorkspacePath(
+                      snapshot.workspace.rootPath,
+                      currentFolder?.relativePath ?? "",
+                    )}
               </h3>
             </div>
             <div className="library-stats">
@@ -585,7 +588,12 @@ export default function App() {
                       <FolderIcon size={16} />
                       <strong>{folder.name}</strong>
                     </span>
-                    <span>{folder.relativePath}</span>
+                    <span>
+                      {absoluteWorkspacePath(
+                        snapshot.workspace.rootPath,
+                        folder.relativePath,
+                      )}
+                    </span>
                     <span>
                       {t("photoCount", {
                         count: countAssetsInFolder(snapshot, folder.id),
@@ -731,6 +739,7 @@ export default function App() {
             ).length
           }
           folderCount={childFolders.length}
+          workspaceRootPath={snapshot.workspace.rootPath}
           tagBusy={busy !== null}
           onSetTags={async (tags) => {
             if (!selectedAsset) return false;

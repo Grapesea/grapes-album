@@ -6,6 +6,7 @@ import {
   useRegisterEvents,
   useSigma,
 } from "@react-sigma/core";
+import { pathLine } from "sigma/rendering";
 import { Pin, PinOff } from "lucide-react";
 import type { GraphNode, GraphView } from "../bindings/types";
 import { useI18n } from "../i18n";
@@ -76,6 +77,11 @@ export function SigmaGraph({
         graph={graph}
         className="sigma-graph"
         options={{
+          primitives: {
+            edges: {
+              paths: [pathLine()],
+            },
+          },
           settings: {
             renderEdgeLabels: false,
             enableEdgeEvents: false,
@@ -107,7 +113,7 @@ export function SigmaGraph({
                   : hovered?.id === node
                     ? "#d6c7ff"
                     : "#7fcfaa",
-                size: hovered?.id === node ? 10 : 7,
+                size: hovered?.id === node ? 5.5 : 3.5,
                 label: "",
               };
             }
@@ -120,9 +126,21 @@ export function SigmaGraph({
                   : data.id === "portal:graphspaces"
                     ? "#b99aff"
                     : "#aa8aff",
-              size: hovered?.id === node ? 24 : 18,
+              size:
+                data.id === "portal:graphspaces"
+                  ? hovered?.id === node
+                    ? 16
+                    : 13
+                  : hovered?.id === node
+                    ? 13
+                    : 10,
             };
           },
+          edgeReducer: (_edge, attributes) => ({
+            ...attributes,
+            color: "#776688",
+            size: 1.6,
+          }),
         }}
       >
         <GraphEvents
@@ -312,10 +330,10 @@ function createGraphologyGraph(
       label: getLabel(node),
       size:
         node.kind === "asset"
-          ? 7
+          ? 3.5
           : node.id === "portal:graphspaces"
-            ? 22
-            : 17,
+            ? 13
+            : 10,
       color: node.available ? "#aa8aff" : "#5d5563",
       nodeKind: node.kind,
       fixed: node.pinned,
@@ -329,8 +347,9 @@ function createGraphologyGraph(
       !graph.hasEdge(edge.source, edge.target)
     ) {
       graph.addEdge(edge.source, edge.target, {
-        size: 1.2,
-        color: "rgba(184, 167, 199, 0.28)",
+        size: 1.6,
+        color: "#776688",
+        type: "line",
       });
     }
   }

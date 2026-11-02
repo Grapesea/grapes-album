@@ -48,10 +48,10 @@ export function Inspector({
       metadata.capturedAt ||
         cameraName ||
         metadata.lensModel ||
+        metadata.focalLength ||
         metadata.exposureTime ||
         metadata.fNumber ||
         metadata.iso ||
-        metadata.focalLength ||
         metadata.gpsLat != null ||
         (metadata.width && metadata.height),
     );
@@ -170,6 +170,13 @@ export function Inspector({
                 value={metadata.lensModel}
               />
             )}
+            {metadata.focalLength != null && (
+              <InfoRow
+                icon={<Ruler size={14} />}
+                label={t("focalLength")}
+                value={`${metadata.focalLength} mm`}
+              />
+            )}
             {metadata.capturedAt && (
               <InfoRow
                 icon={<CalendarDays size={14} />}
@@ -203,13 +210,6 @@ export function Inspector({
                 icon={<Aperture size={14} />}
                 label={t("iso")}
                 value={`ISO ${metadata.iso}`}
-              />
-            )}
-            {metadata.focalLength != null && (
-              <InfoRow
-                icon={<Ruler size={14} />}
-                label={t("focalLength")}
-                value={`${metadata.focalLength} mm`}
               />
             )}
             {metadata.gpsLat != null && metadata.gpsLon != null && (

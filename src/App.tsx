@@ -72,7 +72,6 @@ export default function App() {
   const [photoOpen, setPhotoOpen] = useState(false);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
-  const [watcherOnline, setWatcherOnline] = useState(false);
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot) => {
     setSnapshot(next);
@@ -105,7 +104,6 @@ export default function App() {
       .then((current) => {
         if (!disposed) {
           applySnapshot(current);
-          setWatcherOnline(true);
         }
       })
       .catch(() => {
@@ -115,7 +113,6 @@ export default function App() {
     Promise.all([
       listen<ReconcileReport>("workspace-changed", async (event) => {
         setWatcherReport(event.payload);
-        setWatcherOnline(true);
         try {
           applySnapshot(await getWorkspaceSnapshot());
         } catch (caught) {
@@ -123,7 +120,6 @@ export default function App() {
         }
       }),
       listen<string>("workspace-error", (event) => {
-        setWatcherOnline(false);
         setError(t("watcherError", { error: event.payload }));
       }),
     ]).then((unlisteners) => {
@@ -168,7 +164,6 @@ export default function App() {
       );
       if (!opened) return;
       setWatcherReport(null);
-      setWatcherOnline(true);
       setNotice(t("workspaceOpened"));
       window.setTimeout(() => setNotice(null), 3000);
     } catch (caught) {
@@ -568,88 +563,65 @@ export default function App() {
             </div>
           </section>
 
-          <section className="file-table-panel">
-            <div className="table-heading">
-              <div>
-                <h2>
-                  {folderView === "details" ? t("fileList") : t("gallery")}
-                </h2>
+          {currentAssets.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">
+                <FileImage size={25} />
               </div>
-              {watcherOnline && (
-                <span className="live-badge">
-                  <span />
-                  {t("watcherLive")}
-                </span>
-              )}
+              <h3>{filter ? t("noMatches") : t("emptyFolder")}</h3>
+              <p>{filter ? t("clearFilter") : t("emptyFolderHint")}</p>
             </div>
-            {currentAssets.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <FileImage size={25} />
-                </div>
-                <h3>
-                  {filter ? t("noMatches") : t("emptyFolder")}
-                </h3>
-                <p>
-                  {filter ? t("clearFilter") : t("emptyFolderHint")}
-                </p>
+          ) : folderView !== "details" ? (
+            <VirtualGallery
+              assets={currentAssets}
+              selectedAssetId={selectedAssetId}
+              onSelect={selectAsset}
+              onOpen={openPhoto}
+              compact={folderView === "small"}
+            />
+          ) : (
+            <div className="asset-table" role="table">
+              <div className="asset-table-header" role="row">
+                <span>{t("name")}</span>
+                <span>{t("tags")}</span>
+                <span>{t("modified")}</span>
+                <span>{t("size")}</span>
               </div>
-            ) : folderView !== "details" ? (
-              <VirtualGallery
-                assets={currentAssets}
-                selectedAssetId={selectedAssetId}
-                onSelect={selectAsset}
-                onOpen={openPhoto}
-                compact={folderView === "small"}
-              />
-            ) : (
-              <div className="asset-table" role="table">
-                <div className="asset-table-header" role="row">
-                  <span>{t("name")}</span>
-                  <span>{t("tags")}</span>
-                  <span>{t("modified")}</span>
-                  <span>{t("size")}</span>
-                </div>
-                {currentAssets.map((asset) => (
-                  <button
-                    type="button"
-                    role="row"
-                    className={`asset-row ${
-                      selectedAssetId === asset.id ? "selected" : ""
-                    }`}
-                    key={asset.id}
-                    draggable
-                    onClick={() => selectAsset(asset)}
-                    onDoubleClick={() => openPhoto(asset)}
-                    onDragStart={(event) => {
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData(
-                        "application/x-grapes",
-                        JSON.stringify({ type: "asset", id: asset.id }),
-                      );
-                    }}
-                  >
-                    <span className="asset-name">
-                      <AssetThumbnail asset={asset} />
-                      <span>
-                        <strong>{asset.filename}</strong>
-                        <small>{asset.relativePath}</small>
-                      </span>
+              {currentAssets.map((asset) => (
+                <button
+                  type="button"
+                  role="row"
+                  className={`asset-row ${
+                    selectedAssetId === asset.id ? "selected" : ""
+                  }`}
+                  key={asset.id}
+                  draggable
+                  onClick={() => selectAsset(asset)}
+                  onDoubleClick={() => openPhoto(asset)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData(
+                      "application/x-grapes",
+                      JSON.stringify({ type: "asset", id: asset.id }),
+                    );
+                  }}
+                >
+                  <span className="asset-name">
+                    <AssetThumbnail asset={asset} />
+                    <span>
+                      <strong>{asset.filename}</strong>
+                      <small>{asset.relativePath}</small>
                     </span>
-                    <AssetTags tags={asset.tags} />
-                    <span className="asset-modified">
-                      {formatModifiedAt(
-                        asset.mtimeNs,
-                        locale,
-                        t("unknown"),
-                      )}
-                    </span>
-                    <span>{formatBytes(asset.fileSize)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
+                  </span>
+                  <AssetTags tags={asset.tags} />
+                  <span className="asset-modified">
+                    {formatModifiedAt(asset.mtimeNs, locale, t("unknown"))}
+                  </span>
+                  <span>{formatBytes(asset.fileSize)}</span>
+                </button>
+              ))}
+            </div>
+          )}
             </>
           )}
         </main>

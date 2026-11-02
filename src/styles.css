@@ -1510,6 +1510,23 @@ code,
   overflow: hidden;
 }
 
+.asset-tags.adaptive {
+  position: relative;
+  width: 100%;
+}
+
+.asset-tags-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: 4px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .tag-pill {
   display: inline-flex;
   min-width: 0;

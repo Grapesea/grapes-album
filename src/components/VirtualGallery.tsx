@@ -100,7 +100,12 @@ export function VirtualGallery({
                         </span>
                       )}
                     </span>
-                    <AssetTags tags={asset.tags} limit={1} />
+                    <AssetTags
+                      tags={asset.tags}
+                      limit={compact ? 1 : undefined}
+                      adaptive={!compact}
+                      moreLabel={compact ? undefined : "+1"}
+                    />
                   </span>
                 </button>
               ))}

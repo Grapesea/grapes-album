@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CalendarDays, Camera } from "lucide-react";
 import type { AssetView } from "../bindings/types";
@@ -15,15 +16,18 @@ export function VirtualGallery({
   onSelect,
   onOpen,
   compact = false,
+  scrollElementRef,
 }: {
   assets: AssetView[];
   selectedAssetId: string | null;
   onSelect: (asset: AssetView) => void;
   onOpen: (asset: AssetView) => void;
   compact?: boolean;
+  scrollElementRef: RefObject<HTMLElement | null>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(720);
+  const [scrollMargin, setScrollMargin] = useState(0);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -48,16 +52,42 @@ export function VirtualGallery({
 
   const virtualizer = useVirtualizer({
     count: rowCount,
-    getScrollElement: () => containerRef.current,
+    getScrollElement: () => scrollElementRef.current,
     estimateSize: () => cardHeight + GAP,
     overscan: 3,
+    scrollMargin,
   });
+
+  useLayoutEffect(() => {
+    const gallery = containerRef.current;
+    const scrollElement = scrollElementRef.current;
+    if (!gallery || !scrollElement) return;
+
+    const updateMargin = () => {
+      const galleryRect = gallery.getBoundingClientRect();
+      const scrollRect = scrollElement.getBoundingClientRect();
+      setScrollMargin(
+        galleryRect.top - scrollRect.top + scrollElement.scrollTop,
+      );
+    };
+
+    updateMargin();
+    const observer = new ResizeObserver(updateMargin);
+    observer.observe(gallery);
+    observer.observe(scrollElement);
+    return () => observer.disconnect();
+  }, [scrollElementRef, width, assets.length]);
+
+  const virtualSize = Math.max(
+    0,
+    virtualizer.getTotalSize() - scrollMargin,
+  );
 
   return (
     <div className="gallery-scroll" ref={containerRef}>
       <div
         className="gallery-virtual-space"
-        style={{ height: `${virtualizer.getTotalSize()}px` }}
+        style={{ height: `${virtualSize}px` }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const start = virtualRow.index * columns;
@@ -68,7 +98,7 @@ export function VirtualGallery({
               key={virtualRow.key}
               style={{
                 height: `${cardHeight}px`,
-                transform: `translateY(${virtualRow.start}px)`,
+                transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                 gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
               }}
             >

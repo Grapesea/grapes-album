@@ -1138,10 +1138,8 @@ code,
 }
 
 .gallery-scroll {
-  height: clamp(360px, calc(100vh - 255px), 860px);
-  overflow: auto;
-  scrollbar-color: #3d3443 transparent;
-  scrollbar-width: thin;
+  width: 100%;
+  overflow: visible;
 }
 
 .gallery-virtual-space {

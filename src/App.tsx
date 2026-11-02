@@ -3,6 +3,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { ReactNode } from "react";
@@ -58,6 +59,7 @@ import { absoluteWorkspacePath } from "./utils/paths";
 
 export default function App() {
   const { locale, t } = useI18n();
+  const mainWorkspaceRef = useRef<HTMLElement>(null);
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -460,6 +462,7 @@ export default function App() {
         </aside>
 
         <main
+          ref={mainWorkspaceRef}
           className={`main-workspace ${photoOpen && selectedAsset ? "photo-mode" : ""}`}
         >
           {photoOpen && selectedAsset ? (
@@ -578,6 +581,7 @@ export default function App() {
               onSelect={selectAsset}
               onOpen={openPhoto}
               compact={folderView === "small"}
+              scrollElementRef={mainWorkspaceRef}
             />
           ) : (
             <div className="asset-table" role="table">

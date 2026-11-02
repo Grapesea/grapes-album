@@ -248,7 +248,12 @@ fn photo_response(
             .body(b"photo not found".to_vec())
             .unwrap_or_else(|_| Response::new(b"photo not found".to_vec()));
     };
-    let bytes = std::fs::read(&path).unwrap_or_default();
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(b"photo not readable".to_vec())
+            .unwrap_or_else(|_| Response::new(b"photo not readable".to_vec()));
+    };
     let content_type = match path
         .extension()
         .and_then(|extension| extension.to_str())

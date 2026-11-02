@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -12,6 +18,8 @@ import {
   FolderPlus,
   GitBranch,
   HardDrive,
+  LayoutGrid,
+  List,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -46,6 +54,7 @@ import { AssetTags } from "./components/AssetTags";
 import { AssetThumbnail } from "./components/AssetThumbnail";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { useI18n } from "./i18n";
+import { VirtualGallery } from "./components/VirtualGallery";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -57,6 +66,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [viewMode, setViewMode] = useState<"gallery" | "list">("gallery");
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
   const [watcherOnline, setWatcherOnline] = useState(false);
@@ -237,20 +247,33 @@ export default function App() {
     [snapshot, currentFolderId],
   );
 
+  const deferredFilter = useDeferredValue(filter);
+  const searchActive = deferredFilter.trim().length > 0;
   const currentAssets = useMemo(() => {
-    const normalizedFilter = filter.trim().toLocaleLowerCase();
+    const normalizedFilter = deferredFilter.trim().toLocaleLowerCase();
+    const source = normalizedFilter ? snapshot?.assets ?? [] : snapshot?.assets.filter(
+      (asset) => asset.folderId === currentFolderId,
+    ) ?? [];
     return (
-      snapshot?.assets.filter(
+      source.filter(
         (asset) =>
-          asset.folderId === currentFolderId &&
           (!normalizedFilter ||
-            asset.filename.toLocaleLowerCase().includes(normalizedFilter) ||
-            asset.tags.some((tag) =>
-              tag.toLocaleLowerCase().includes(normalizedFilter),
-            )),
+            [
+              asset.filename,
+              asset.relativePath,
+              asset.metadata.cameraMake,
+              asset.metadata.cameraModel,
+              asset.metadata.lensModel,
+              asset.metadata.capturedAt,
+              ...asset.tags,
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLocaleLowerCase()
+              .includes(normalizedFilter)),
       ) ?? []
     );
-  }, [snapshot, currentFolderId, filter]);
+  }, [snapshot, currentFolderId, deferredFilter]);
 
   const breadcrumbs = useMemo(() => {
     if (!snapshot || !currentFolder) return [];
@@ -479,13 +502,36 @@ export default function App() {
               >
                 <Pencil size={15} />
               </button>
+              <button
+                type="button"
+                className={`secondary-button view-mode-button ${
+                  viewMode === "gallery" ? "active" : ""
+                }`}
+                title={t("showGallery")}
+                onClick={() => setViewMode("gallery")}
+              >
+                <LayoutGrid size={15} />
+              </button>
+              <button
+                type="button"
+                className={`secondary-button view-mode-button ${
+                  viewMode === "list" ? "active" : ""
+                }`}
+                title={t("showList")}
+                onClick={() => setViewMode("list")}
+              >
+                <List size={15} />
+              </button>
             </div>
           </div>
 
           <section className="library-header">
             <div>
               <h3>
-                {currentFolder?.relativePath || snapshot.workspace.rootPath}
+                {searchActive
+                  ? t("searchSummary", { count: currentAssets.length })
+                  : currentFolder?.relativePath ||
+                    snapshot.workspace.rootPath}
               </h3>
             </div>
             <div className="library-stats">
@@ -502,7 +548,7 @@ export default function App() {
             </div>
           </section>
 
-          {childFolders.length > 0 && (
+          {!searchActive && childFolders.length > 0 && (
             <section className="folder-strip">
               {childFolders.map((folder) => (
                 <button
@@ -543,7 +589,9 @@ export default function App() {
           <section className="file-table-panel">
             <div className="table-heading">
               <div>
-                <h2>{t("fileList")}</h2>
+                <h2>
+                  {viewMode === "gallery" ? t("gallery") : t("fileList")}
+                </h2>
               </div>
               {watcherOnline && (
                 <span className="live-badge">
@@ -564,6 +612,13 @@ export default function App() {
                   {filter ? t("clearFilter") : t("emptyFolderHint")}
                 </p>
               </div>
+            ) : viewMode === "gallery" ? (
+              <VirtualGallery
+                assets={currentAssets}
+                selectedAssetId={selectedAssetId}
+                onSelect={selectAsset}
+                onOpen={selectAsset}
+              />
             ) : (
               <div className="asset-table" role="table">
                 <div className="asset-table-header" role="row">

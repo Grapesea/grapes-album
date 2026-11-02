@@ -33,16 +33,17 @@ pub fn ensure_thumbnail(
         return Ok(ThumbnailResult::Existing);
     }
 
-    let marker = target.with_extension("unsupported");
+    let marker = target.with_extension("unsupported-v1");
     if marker.is_file() {
         return Ok(ThumbnailResult::Unsupported);
     }
 
-    let Ok(image) = image::open(source) else {
+    let image = image::open(source).ok().or_else(|| raw_image(source));
+    let Some(image) = image else {
         if let Some(parent) = marker.parent() {
             fs::create_dir_all(parent)?;
         }
-        let _ = fs::write(&marker, b"unsupported image format");
+        let _ = fs::write(&marker, b"unsupported image format v1");
         return Ok(ThumbnailResult::Unsupported);
     };
 
@@ -64,6 +65,18 @@ pub fn ensure_thumbnail(
     }
     fs::rename(temporary, target)?;
     Ok(ThumbnailResult::Created)
+}
+
+fn raw_image(source: &Path) -> Option<DynamicImage> {
+    let raw = rawler::rawsource::RawSource::new(source).ok()?;
+    let decoder = rawler::get_decoder(&raw).ok()?;
+    let params = rawler::decoders::RawDecodeParams::default();
+    decoder
+        .preview_image(&raw, &params)
+        .ok()
+        .flatten()
+        .or_else(|| decoder.thumbnail_image(&raw, &params).ok().flatten())
+        .or_else(|| decoder.full_image(&raw, &params).ok().flatten())
 }
 
 fn apply_orientation(image: DynamicImage, orientation: Option<u16>) -> DynamicImage {

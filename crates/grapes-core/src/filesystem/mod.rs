@@ -11,8 +11,10 @@ pub mod validation;
 pub use identity::{file_identity, mtime_ns};
 
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "dng",
-    "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "pef", "srw",
+    "jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ari",
+    "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "fff", "iiq", "kdc", "mef",
+    "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "raf", "raw", "rw2", "rwl", "srw", "x3f",
+    "3fr", "qtk",
 ];
 
 #[derive(Debug, Clone)]

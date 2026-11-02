@@ -47,15 +47,16 @@ export function VirtualGallery({
     ),
   );
   const cardWidth = (width - GAP * (columns - 1)) / columns;
-  const cardHeight = cardWidth * 0.7 + (compact ? 54 : 76);
+  const estimatedRowHeight = cardWidth * 0.7 + (compact ? 62 : 90);
   const rowCount = Math.ceil(assets.length / columns);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => cardHeight + GAP,
+    estimateSize: () => estimatedRowHeight,
     overscan: 3,
     scrollMargin,
+    gap: GAP,
   });
 
   useLayoutEffect(() => {
@@ -96,8 +97,9 @@ export function VirtualGallery({
             <div
               className="gallery-row"
               key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
               style={{
-                height: `${cardHeight}px`,
                 transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                 gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
               }}

@@ -1,0 +1,12 @@
+Design.md
+node_modules/
+dist/
+target/
+src-tauri/target/
+crates/*/target/
+*.log
+.DS_Store
+.cache/
+.cache/
+nul
+README.md

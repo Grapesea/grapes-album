@@ -56,10 +56,23 @@ import { useI18n } from "./i18n";
 import { VirtualGallery } from "./components/VirtualGallery";
 import { PhotoWorkspace } from "./components/PhotoWorkspace";
 import { absoluteWorkspacePath } from "./utils/paths";
+import { SidebarResizer } from "./components/SidebarResizer";
+
+const LEFT_SIDEBAR_MIN = 190;
+const RIGHT_SIDEBAR_MIN = 230;
+const CENTER_PANEL_MIN = 360;
+const SIDEBAR_HANDLES_WIDTH = 10;
 
 export default function App() {
   const { locale, t } = useI18n();
   const mainWorkspaceRef = useRef<HTMLElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
+    storedSidebarWidth("grapes.sidebar.left", 264, LEFT_SIDEBAR_MIN),
+  );
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(() =>
+    storedSidebarWidth("grapes.sidebar.right", 316, RIGHT_SIDEBAR_MIN),
+  );
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -74,6 +87,72 @@ export default function App() {
   const [photoOpen, setPhotoOpen] = useState(false);
   const [watcherReport, setWatcherReport] =
     useState<ReconcileReport | null>(null);
+
+  const workspaceWidth = () =>
+    workspaceRef.current?.clientWidth ?? window.innerWidth;
+  const leftSidebarMax = Math.max(
+    LEFT_SIDEBAR_MIN,
+    workspaceWidth() -
+      rightSidebarWidth -
+      CENTER_PANEL_MIN -
+      SIDEBAR_HANDLES_WIDTH,
+  );
+  const rightSidebarMax = Math.max(
+    RIGHT_SIDEBAR_MIN,
+    workspaceWidth() -
+      leftSidebarWidth -
+      CENTER_PANEL_MIN -
+      SIDEBAR_HANDLES_WIDTH,
+  );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("grapes.sidebar.left", String(leftSidebarWidth));
+    } catch {
+      // Resizing still works when local storage is unavailable.
+    }
+  }, [leftSidebarWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("grapes.sidebar.right", String(rightSidebarWidth));
+    } catch {
+      // Resizing still works when local storage is unavailable.
+    }
+  }, [rightSidebarWidth]);
+
+  useEffect(() => {
+    const clampToWindow = () => {
+      const width = workspaceWidth();
+      setLeftSidebarWidth((current) =>
+        Math.min(
+          current,
+          Math.max(
+            LEFT_SIDEBAR_MIN,
+            width -
+              rightSidebarWidth -
+              CENTER_PANEL_MIN -
+              SIDEBAR_HANDLES_WIDTH,
+          ),
+        ),
+      );
+      setRightSidebarWidth((current) =>
+        Math.min(
+          current,
+          Math.max(
+            RIGHT_SIDEBAR_MIN,
+            width -
+              leftSidebarWidth -
+              CENTER_PANEL_MIN -
+              SIDEBAR_HANDLES_WIDTH,
+          ),
+        ),
+      );
+    };
+    clampToWindow();
+    window.addEventListener("resize", clampToWindow);
+    return () => window.removeEventListener("resize", clampToWindow);
+  }, [leftSidebarWidth, rightSidebarWidth]);
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot) => {
     setSnapshot(next);
@@ -396,7 +475,13 @@ export default function App() {
         </button>
       </header>
 
-      <div className="workspace-grid">
+      <div
+        className="workspace-grid"
+        ref={workspaceRef}
+        style={{
+          gridTemplateColumns: `${leftSidebarWidth}px 5px minmax(${CENTER_PANEL_MIN}px, 1fr) 5px ${rightSidebarWidth}px`,
+        }}
+      >
         <aside className="files-sidebar">
           <div className="sidebar-heading">
             <div>
@@ -460,6 +545,15 @@ export default function App() {
             </div>
           </div>
         </aside>
+
+        <SidebarResizer
+          side="left"
+          width={leftSidebarWidth}
+          min={LEFT_SIDEBAR_MIN}
+          max={leftSidebarMax}
+          defaultWidth={264}
+          onChange={setLeftSidebarWidth}
+        />
 
         <main
           ref={mainWorkspaceRef}
@@ -630,6 +724,15 @@ export default function App() {
           )}
         </main>
 
+        <SidebarResizer
+          side="right"
+          width={rightSidebarWidth}
+          min={RIGHT_SIDEBAR_MIN}
+          max={rightSidebarMax}
+          defaultWidth={316}
+          onChange={setRightSidebarWidth}
+        />
+
         <Inspector
           asset={selectedAsset}
           folder={currentFolder}
@@ -691,6 +794,15 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function storedSidebarWidth(key: string, fallback: number, min: number) {
+  try {
+    const value = Number(localStorage.getItem(key));
+    return Number.isFinite(value) && value > 0 ? Math.max(min, value) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function BrandMark() {

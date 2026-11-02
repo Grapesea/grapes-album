@@ -90,7 +90,7 @@ export function FileTree({
                 className={`tree-row tree-file ${
                   selectedAssetId === asset.id ? "selected" : ""
                 }`}
-                style={{ paddingLeft: 18 + (depth + 1) * 16 }}
+                style={{ paddingLeft: 18 + (depth + 0.32) * 16 }}
                 onClick={() => onSelectAsset(asset)}
                 onDragStart={(event) => setDragPayload(event, {
                   type: "asset",

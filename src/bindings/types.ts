@@ -35,12 +35,12 @@ export interface PhotoMetadata {
   cameraMake: string | null;
   cameraModel: string | null;
   lensModel: string | null;
+  focalLength: number | null;
   gpsLat: number | null;
   gpsLon: number | null;
   exposureTime: string | null;
   fNumber: number | null;
   iso: number | null;
-  focalLength: number | null;
   orientation: number | null;
   scanned: boolean;
 }

@@ -317,6 +317,106 @@ code,
   margin-left: auto;
 }
 
+.recent-workspaces {
+  width: min(560px, 100%);
+  margin: 22px auto 0;
+}
+
+.recent-workspaces > header {
+  display: flex;
+  margin-bottom: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recent-workspaces > header strong {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.recent-workspaces > header span {
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.recent-workspace-list {
+  display: grid;
+  max-height: 245px;
+  overflow: auto;
+  gap: 5px;
+  scrollbar-color: #3d3443 transparent;
+  scrollbar-width: thin;
+}
+
+.recent-workspace-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 7px 9px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.recent-workspace-item:hover:not(:disabled) {
+  border-color: rgba(169, 135, 255, 0.3);
+  background: rgba(169, 135, 255, 0.075);
+}
+
+.recent-workspace-item:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.recent-workspace-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(169, 135, 255, 0.1);
+  color: var(--violet-light);
+}
+
+.recent-workspace-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-workspace-copy strong,
+.recent-workspace-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-workspace-copy strong {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.recent-workspace-copy small {
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.recent-workspace-item > svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
 .inline-alert {
   display: flex;
   width: fit-content;
@@ -1221,15 +1321,6 @@ body.sidebar-resizing {
   border-radius: 50%;
   background: rgba(169, 135, 255, 0.14);
   color: var(--violet-light);
-}
-
-.phase-chip {
-  margin-left: auto;
-  padding: 2px 5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--faint);
-  font-size: 8px;
 }
 
 .tree-scroll {

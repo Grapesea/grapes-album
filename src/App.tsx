@@ -87,6 +87,14 @@ const LEFT_SIDEBAR_MIN = 190;
 const RIGHT_SIDEBAR_MIN = 230;
 const CENTER_PANEL_MIN = 360;
 const SIDEBAR_HANDLES_WIDTH = 10;
+const RECENT_WORKSPACES_KEY = "grapes.workspaces.recent";
+const RECENT_WORKSPACES_LIMIT = 8;
+
+interface RecentWorkspace {
+  path: string;
+  name: string;
+  openedAt: number;
+}
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -120,6 +128,9 @@ export default function App() {
     [],
   );
   const [graphRevision, setGraphRevision] = useState(0);
+  const [recentWorkspaces, setRecentWorkspaces] = useState<RecentWorkspace[]>(
+    readRecentWorkspaces,
+  );
   const [askGrapesModel, setAskGrapesModel] = useState("Qwen/Qwen3.5-4B");
   const [semanticPanel, setSemanticPanel] = useState<
     "results" | "settings" | null
@@ -289,6 +300,7 @@ export default function App() {
       .then((current) => {
         if (!disposed) {
           applySnapshot(current);
+          rememberWorkspace(current.workspace, setRecentWorkspaces);
         }
       })
       .catch(() => {
@@ -343,18 +355,30 @@ export default function App() {
     }
   };
 
+  const openWorkspaceAtPath = async (path: string) => {
+    setBusy(t("openingWorkspace"));
+    setError(null);
+    try {
+      const opened = await openWorkspace(path);
+      applySnapshot(opened);
+      rememberWorkspace(opened.workspace, setRecentWorkspaces);
+      setWatcherReport(null);
+      setNotice(t("workspaceOpened"));
+      window.setTimeout(() => setNotice(null), 3000);
+      return true;
+    } catch (caught) {
+      setError(normalizeError(caught, t("operationFailed")));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const openWorkspacePicker = async () => {
     setError(null);
     try {
       const path = await chooseWorkspace(t("openWorkspaceDialog"));
-      if (!path) return;
-      const opened = await run(t("openingWorkspace"), () =>
-        openWorkspace(path),
-      );
-      if (!opened) return;
-      setWatcherReport(null);
-      setNotice(t("workspaceOpened"));
-      window.setTimeout(() => setNotice(null), 3000);
+      if (path) await openWorkspaceAtPath(path);
     } catch (caught) {
       setError(normalizeError(caught, t("operationFailed")));
     }
@@ -672,6 +696,34 @@ export default function App() {
             {busy ?? t("openWorkspace")}
             {!busy && <ArrowRight size={17} />}
           </button>
+          {recentWorkspaces.length > 0 && (
+            <section className="recent-workspaces">
+              <header>
+                <strong>{t("recentWorkspaces")}</strong>
+              </header>
+              <div className="recent-workspace-list">
+                {recentWorkspaces.map((workspace) => (
+                  <button
+                    type="button"
+                    className="recent-workspace-item"
+                    key={workspace.path.toLocaleLowerCase()}
+                    onClick={() => void openWorkspaceAtPath(workspace.path)}
+                    disabled={busy !== null || !desktopRuntime}
+                    title={workspace.path}
+                  >
+                    <span className="recent-workspace-icon">
+                      <FolderIcon size={16} />
+                    </span>
+                    <span className="recent-workspace-copy">
+                      <strong>{workspace.name}</strong>
+                      <small>{workspace.path}</small>
+                    </span>
+                    <ArrowRight size={14} />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {!desktopRuntime && (
             <div className="inline-alert">
               <CircleAlert size={17} />
@@ -742,7 +794,6 @@ export default function App() {
               <Sparkles size={15} />
             </span>
             GraphSpaces
-            <span className="phase-chip">P2</span>
           </button>
           <div className="tree-scroll">
             <FileTree
@@ -1186,6 +1237,56 @@ function storedSidebarWidth(key: string, fallback: number, min: number) {
   } catch {
     return fallback;
   }
+}
+
+function readRecentWorkspaces(): RecentWorkspace[] {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(RECENT_WORKSPACES_KEY) ?? "[]",
+    ) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item): item is RecentWorkspace =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof item.path === "string" &&
+          item.path.length > 0 &&
+          typeof item.name === "string" &&
+          typeof item.openedAt === "number",
+      )
+      .sort((left, right) => right.openedAt - left.openedAt)
+      .slice(0, RECENT_WORKSPACES_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function rememberWorkspace(
+  workspace: WorkspaceSnapshot["workspace"],
+  update: (
+    updater: (current: RecentWorkspace[]) => RecentWorkspace[],
+  ) => void,
+) {
+  update((current) => {
+    const normalizedPath = workspace.rootPath.toLocaleLowerCase();
+    const next = [
+      {
+        path: workspace.rootPath,
+        name: workspace.name,
+        openedAt: Date.now(),
+      },
+      ...current.filter(
+        (item) => item.path.toLocaleLowerCase() !== normalizedPath,
+      ),
+    ].slice(0, RECENT_WORKSPACES_LIMIT);
+    try {
+      localStorage.setItem(RECENT_WORKSPACES_KEY, JSON.stringify(next));
+    } catch {
+      // History remains available for the current run.
+    }
+    return next;
+  });
 }
 
 function Stat({

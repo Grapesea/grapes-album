@@ -127,6 +127,7 @@ export interface GraphEdge {
   id: string;
   source: string;
   target: string;
+  weight: number;
 }
 
 export interface GraphView {
@@ -142,6 +143,62 @@ export interface WorkspaceSnapshot {
   assets: AssetView[];
   rootFolderId: string;
   lastReconcile: ReconcileReport | null;
+}
+
+export interface SemanticProviderConfig {
+  kind: "qa" | "embedding" | "rerank";
+  providerType: string;
+  baseUrl: string;
+  model: string;
+  enabled: boolean;
+  apiKey: string | null;
+}
+
+export interface SemanticSettings {
+  qa: SemanticProviderConfig;
+  embedding: SemanticProviderConfig;
+  rerank: SemanticProviderConfig;
+  indexStatus: SemanticIndexStatus;
+}
+
+export interface SemanticIndexStatus {
+  totalAssets: number;
+  indexedAssets: number;
+  pendingAssets: number;
+  modelId: string | null;
+  dimension: number | null;
+}
+
+export interface SemanticIndexReport {
+  indexed: number;
+  failed: number;
+  warnings: string[];
+}
+
+export interface SemanticIndexResult {
+  report: SemanticIndexReport;
+  status: SemanticIndexStatus;
+}
+
+export interface SemanticMatchReason {
+  kind: "embedding" | "classification" | "metadata" | "rerank";
+  label: string;
+  score: number;
+}
+
+export interface SemanticSearchResult {
+  assetId: string;
+  filename: string;
+  relativePath: string;
+  score: number;
+  matchReasons: SemanticMatchReason[];
+}
+
+export interface SemanticSearchResponse {
+  candidateCount: number;
+  reranked: boolean;
+  results: SemanticSearchResult[];
+  warnings: string[];
 }
 
 export type DragPayload =

@@ -15,11 +15,13 @@ import type {
   GraphView,
   SmartGraphFilter,
 } from "../bindings/types";
-import { classificationValueDisplayName } from "../classificationLabels";
+import {
+  classificationValueDisplayName,
+  dimensionDisplayName,
+} from "../classificationLabels";
 import { useI18n } from "../i18n";
 import { SigmaGraph } from "../graph/SigmaGraph";
-
-type Translator = ReturnType<typeof useI18n>["t"];
+import { normalizeError } from "../utils/format";
 
 export function GraphWorkspace({
   workspaceId,
@@ -66,7 +68,9 @@ export function GraphWorkspace({
         setClassificationDimensions(nextDimensions);
         setLayoutNonce(0);
       } catch (caught) {
-        if (request === requestId.current) onError(normalizeError(caught));
+        if (request === requestId.current) {
+          onError(normalizeError(caught, "GraphSpaces failed to load."));
+        }
       } finally {
         if (request === requestId.current) setLoading(false);
       }
@@ -120,7 +124,7 @@ export function GraphWorkspace({
           ),
         );
       } catch (caught) {
-        onError(normalizeError(caught));
+        onError(normalizeError(caught, "GraphSpaces failed to save positions."));
         throw caught;
       }
     },
@@ -134,7 +138,7 @@ export function GraphWorkspace({
         onNavigate(graph.id);
         return true;
       } catch (caught) {
-        onError(normalizeError(caught));
+        onError(normalizeError(caught, "GraphSpaces failed to create the graph."));
         return false;
       }
     },
@@ -150,7 +154,7 @@ export function GraphWorkspace({
         else await load(graphId);
         return true;
       } catch (caught) {
-        onError(normalizeError(caught));
+        onError(normalizeError(caught, "GraphSpaces failed to delete the graph."));
         return false;
       }
     },
@@ -194,7 +198,7 @@ export function GraphWorkspace({
                 onClick={() => onNavigate(graph.id)}
                 aria-current={graph.id === graphId ? "page" : undefined}
               >
-                {graphLabel(graph, catalog, t, locale)}
+                {graphLabel(graph, catalog, locale)}
               </button>
             </span>
           ))}
@@ -207,7 +211,7 @@ export function GraphWorkspace({
           >
             {catalog.map((graph) => (
               <option key={graph.id} value={graph.id}>
-                {graphLabel(graph, catalog, t, locale)}
+                {graphLabel(graph, catalog, locale)}
               </option>
             ))}
           </select>
@@ -232,7 +236,7 @@ export function GraphWorkspace({
         ) : view && view.graph.id === graphId ? (
           <>
             <div className="graph-stage-heading">
-              <strong>{graphLabel(view.graph, catalog, t, locale)}</strong>
+              <strong>{graphLabel(view.graph, catalog, locale)}</strong>
               <span>
                 {t("graphNodeCount", {
                   count: view.nodes.filter((node) => !node.dummy).length,
@@ -297,17 +301,16 @@ export function GraphWorkspace({
 function graphLabel(
   graph: GraphInfo,
   catalog: GraphInfo[],
-  t: Translator,
   locale: ReturnType<typeof useI18n>["locale"],
 ) {
   if (graph.kind === "root") return "GraphSpaces";
   const dimension = graph.dimension
-    ? dimensionDisplay(graph.dimension, graph.name, t)
+    ? dimensionDisplayName(graph.dimension, graph.name, locale)
     : graph.name;
   if (graph.kind === "value") {
     const parent = catalog.find((item) => item.id === graph.parentId);
     const parentLabel = parent?.dimension
-      ? dimensionDisplay(parent.dimension, parent.name, t)
+      ? dimensionDisplayName(parent.dimension, parent.name, locale)
       : dimension;
     return `${parentLabel} · ${classificationValueDisplayName(
       graph.dimensionValue ?? "",
@@ -316,36 +319,4 @@ function graphLabel(
     )}`;
   }
   return dimension;
-}
-
-function dimensionDisplay(
-  dimension: string,
-  fallback: string,
-  t: Translator,
-) {
-  const translated = dimensionLabel(dimension, t);
-  return translated === dimension ? fallback : translated;
-}
-
-export function dimensionLabel(dimension: string, t: Translator) {
-  const keys = {
-    date: "dimensionDate",
-    time: "dimensionTime",
-    weather: "dimensionWeather",
-    location: "dimensionLocation",
-    type: "dimensionType",
-    camera: "dimensionCamera",
-    lens: "dimensionLens",
-    tone: "dimensionTone",
-    custom: "dimensionCustom",
-    tags: "dimensionTags",
-  } as const;
-  const key = keys[dimension as keyof typeof keys];
-  return key ? t(key) : dimension;
-}
-
-function normalizeError(error: unknown) {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return "GraphSpaces failed to load.";
 }

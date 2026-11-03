@@ -1,9 +1,7 @@
-Design.md
+/Design.md
 node_modules/
 dist/
 target/
-src-tauri/target/
-crates/*/target/
 *.log
 .DS_Store
 .cache/
@@ -11,4 +9,3 @@ nul
 /README.md
 src-tauri/gen/schemas/
 ref/
-tests/

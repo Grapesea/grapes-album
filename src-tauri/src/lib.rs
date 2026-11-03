@@ -1,9 +1,13 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use grapes_core::{
-    DimensionView, GraphInfo, GraphView, SmartGraphFilter, Workspace, WorkspaceSnapshot,
+    semantic::{fuse_search_results, RerankCandidate, SemanticProviderClient},
+    DimensionView, GraphInfo, GraphView, SemanticIndexReport, SemanticIndexStatus,
+    SemanticProviderConfig, SemanticSearchResponse, SmartGraphFilter, Workspace, WorkspaceSnapshot,
     WorkspaceWatcher,
 };
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct Session {
@@ -14,6 +18,22 @@ struct Session {
 #[derive(Default)]
 struct AppState {
     session: Mutex<Option<Session>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticSettingsView {
+    qa: SemanticProviderConfig,
+    embedding: SemanticProviderConfig,
+    rerank: SemanticProviderConfig,
+    index_status: SemanticIndexStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticIndexResult {
+    report: SemanticIndexReport,
+    status: SemanticIndexStatus,
 }
 
 #[tauri::command]
@@ -296,6 +316,342 @@ fn delete_smart_graph(
     catalog
 }
 
+fn semantic_settings_for(
+    workspace: &Arc<Mutex<Workspace>>,
+) -> std::result::Result<SemanticSettingsView, String> {
+    let workspace = workspace.lock().map_err(|_| "工作区锁已损坏".to_owned())?;
+    let configs = workspace
+        .semantic_provider_configs()
+        .map_err(error_string)?;
+    let embedding = configs
+        .iter()
+        .find(|config| config.kind == "embedding")
+        .cloned()
+        .ok_or_else(|| "缺少 Embedding Provider 配置".to_owned())?;
+    let rerank = configs
+        .iter()
+        .find(|config| config.kind == "rerank")
+        .cloned()
+        .ok_or_else(|| "缺少 Rerank Provider 配置".to_owned())?;
+    let qa = workspace
+        .ask_grapes_provider_config()
+        .map_err(error_string)?;
+    let index_status = workspace
+        .semantic_index_status(&embedding)
+        .map_err(error_string)?;
+    Ok(SemanticSettingsView {
+        qa,
+        embedding,
+        rerank,
+        index_status,
+    })
+}
+
+#[tauri::command]
+fn semantic_settings(
+    state: State<'_, AppState>,
+) -> std::result::Result<SemanticSettingsView, String> {
+    let workspace = active_workspace(&state)?;
+    semantic_settings_for(&workspace)
+}
+
+#[tauri::command]
+fn save_semantic_provider(
+    state: State<'_, AppState>,
+    config: SemanticProviderConfig,
+) -> std::result::Result<SemanticSettingsView, String> {
+    let workspace = active_workspace(&state)?;
+    workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .save_semantic_provider(&config)
+        .map_err(error_string)?;
+    semantic_settings_for(&workspace)
+}
+
+#[tauri::command]
+async fn test_semantic_provider(
+    state: State<'_, AppState>,
+    kind: String,
+) -> std::result::Result<String, String> {
+    let workspace = active_workspace(&state)?;
+    let config = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .semantic_provider_configs()
+        .map_err(error_string)?
+        .into_iter()
+        .find(|config| config.kind == kind)
+        .ok_or_else(|| format!("Provider {kind} 不存在"))?;
+    if !config.enabled {
+        return Ok("Provider 已关闭".into());
+    }
+    let api_key = config
+        .api_key
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "请先填写 API Key".to_owned())?;
+    let client = SemanticProviderClient::new().map_err(error_string)?;
+    if kind == "embedding" {
+        let vector = client
+            .embed_text(&config, &api_key, "Grapes semantic search connection test")
+            .await
+            .map_err(error_string)?;
+        Ok(format!("连接成功，向量维度 {}", vector.len()))
+    } else {
+        let result = client
+            .rerank(
+                &config,
+                &api_key,
+                "connection test",
+                &[RerankCandidate {
+                    asset_id: "test".into(),
+                    text: "connection test image".into(),
+                    image_jpeg: None,
+                }],
+            )
+            .await
+            .map_err(error_string)?;
+        Ok(format!("连接成功，Rerank 模式 {}", result.mode))
+    }
+}
+
+#[tauri::command]
+async fn rebuild_semantic_index(
+    state: State<'_, AppState>,
+) -> std::result::Result<SemanticIndexResult, String> {
+    let workspace = active_workspace(&state)?;
+    let config = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .semantic_provider_configs()
+        .map_err(error_string)?
+        .into_iter()
+        .find(|config| config.kind == "embedding")
+        .ok_or_else(|| "缺少 Embedding Provider 配置".to_owned())?;
+    if !config.enabled {
+        return Err("Embedding Provider 已关闭".into());
+    }
+    let api_key = config
+        .api_key
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "请先填写 Embedding API Key".to_owned())?;
+    let client = SemanticProviderClient::new().map_err(error_string)?;
+    let status = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .semantic_index_status(&config)
+        .map_err(error_string)?;
+    let sources = if let Some(model_id) = status.model_id.as_deref() {
+        workspace
+            .lock()
+            .map_err(|_| "工作区锁已损坏".to_owned())?
+            .pending_semantic_index_sources(model_id)
+            .map_err(error_string)?
+    } else {
+        workspace
+            .lock()
+            .map_err(|_| "工作区锁已损坏".to_owned())?
+            .semantic_index_sources()
+            .map_err(error_string)?
+    };
+    let mut report = SemanticIndexReport::default();
+    let mut model = status
+        .model_id
+        .clone()
+        .zip(status.dimension)
+        .map(|(id, dimension)| (id, dimension));
+    let mut last_error = None;
+    for source in sources {
+        let bytes = match std::fs::read(&source.thumbnail_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                report.failed += 1;
+                report
+                    .warnings
+                    .push(format!("{}: {error}", source.thumbnail_path.display()));
+                continue;
+            }
+        };
+        match client.embed_image(&config, &api_key, &bytes).await {
+            Ok(vector) => {
+                let dimension = vector.len();
+                if let Some((_, existing_dimension)) = &model {
+                    if *existing_dimension != dimension {
+                        last_error = Some(format!(
+                            "Embedding 维度从 {existing_dimension} 变为 {dimension}，请检查 Provider 配置"
+                        ));
+                        report.failed += 1;
+                        continue;
+                    }
+                } else {
+                    let id = workspace
+                        .lock()
+                        .map_err(|_| "工作区锁已损坏".to_owned())?
+                        .ensure_semantic_model(&config, dimension)
+                        .map_err(error_string)?;
+                    model = Some((id, dimension));
+                }
+                let model_id = &model.as_ref().expect("model initialized").0;
+                workspace
+                    .lock()
+                    .map_err(|_| "工作区锁已损坏".to_owned())?
+                    .store_semantic_embedding(&source.asset_id, model_id, &vector)
+                    .map_err(error_string)?;
+                report.indexed += 1;
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+                report.failed += 1;
+                if report.warnings.len() < 8 {
+                    report
+                        .warnings
+                        .push(format!("{}: {error}", source.asset_id));
+                }
+            }
+        }
+    }
+    if report.indexed == 0 && report.failed > 0 {
+        return Err(last_error.unwrap_or_else(|| "Embedding 索引失败".into()));
+    }
+    let status = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .semantic_index_status(&config)
+        .map_err(error_string)?;
+    Ok(SemanticIndexResult { report, status })
+}
+
+#[tauri::command]
+async fn semantic_search(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> std::result::Result<SemanticSearchResponse, String> {
+    let query = query.trim().to_owned();
+    if query.is_empty() {
+        return Err("请输入要查找的照片描述".into());
+    }
+    let workspace = active_workspace(&state)?;
+    let configs = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .semantic_provider_configs()
+        .map_err(error_string)?;
+    let embedding_config = configs
+        .iter()
+        .find(|config| config.kind == "embedding")
+        .cloned()
+        .ok_or_else(|| "缺少 Embedding Provider 配置".to_owned())?;
+    let rerank_config = configs
+        .iter()
+        .find(|config| config.kind == "rerank")
+        .cloned();
+    if !embedding_config.enabled {
+        return Err("Embedding Provider 已关闭".into());
+    }
+    let embedding_key = embedding_config.api_key.clone();
+    let rerank_key = rerank_config
+        .as_ref()
+        .and_then(|config| config.api_key.clone());
+    let embedding_key = embedding_key.ok_or_else(|| "请先填写 Embedding API Key".to_owned())?;
+    let client = SemanticProviderClient::new().map_err(error_string)?;
+    let query_vector = client
+        .embed_text(&embedding_config, &embedding_key, &query)
+        .await
+        .map_err(error_string)?;
+
+    let (assets, embeddings, status) = {
+        let workspace = workspace.lock().map_err(|_| "工作区锁已损坏".to_owned())?;
+        let model_id = workspace
+            .ensure_semantic_model(&embedding_config, query_vector.len())
+            .map_err(error_string)?;
+        let assets = workspace.semantic_assets().map_err(error_string)?;
+        let embeddings = workspace
+            .semantic_embeddings(&model_id)
+            .map_err(error_string)?;
+        let status = workspace
+            .semantic_index_status(&embedding_config)
+            .map_err(error_string)?;
+        (assets, embeddings, status)
+    };
+    let candidate_limit = limit.unwrap_or(20).max(1).min(100) * 2;
+    let mut results =
+        fuse_search_results(&query, &assets, &embeddings, &query_vector, candidate_limit);
+    let candidate_count = results.len();
+    let mut warnings = Vec::new();
+    if status.pending_assets > 0 {
+        warnings.push(format!(
+            "{} 张照片尚未生成语义向量，当前结果只使用已索引照片",
+            status.pending_assets
+        ));
+    }
+    let mut reranked = false;
+    if let Some(rerank_config) = rerank_config {
+        if rerank_config.enabled {
+            if let Some(rerank_key) = rerank_key {
+                let by_id = assets
+                    .iter()
+                    .map(|asset| (asset.asset_id.as_str(), asset))
+                    .collect::<HashMap<_, _>>();
+                let rerank_candidates = results
+                    .iter()
+                    .filter_map(|result| {
+                        let asset = by_id.get(result.asset_id.as_str())?;
+                        Some(RerankCandidate {
+                            asset_id: result.asset_id.clone(),
+                            text: asset.combined_text.clone(),
+                            image_jpeg: asset
+                                .thumbnail_path
+                                .as_deref()
+                                .and_then(|path| std::fs::read(path).ok()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if !rerank_candidates.is_empty() {
+                    match client
+                        .rerank(&rerank_config, &rerank_key, &query, &rerank_candidates)
+                        .await
+                    {
+                        Ok(outcome) => {
+                            reranked = true;
+                            if outcome.mode == "text" {
+                                warnings.push(
+                                    "Rerank 多模态请求被拒绝，已降级为文本与元数据重排序".into(),
+                                );
+                            }
+                            for result in &mut results {
+                                if let Some(score) = outcome.scores.get(&result.asset_id) {
+                                    result.score = 0.35 * result.score + 0.65 * score;
+                                    result.match_reasons.push(grapes_core::SemanticMatchReason {
+                                        kind: "rerank".into(),
+                                        label: String::new(),
+                                        score: *score,
+                                    });
+                                }
+                            }
+                            results.sort_by(|left, right| right.score.total_cmp(&left.score));
+                        }
+                        Err(error) => {
+                            warnings.push(format!("Rerank 失败，已返回向量结果：{error}"))
+                        }
+                    }
+                }
+            } else {
+                warnings.push("未配置 Rerank API Key，已关闭重排序".into());
+            }
+        }
+    }
+    results.truncate(limit.unwrap_or(20).max(1).min(100));
+    Ok(SemanticSearchResponse {
+        candidate_count,
+        reranked,
+        results,
+        warnings,
+    })
+}
+
 fn active_workspace(
     state: &State<'_, AppState>,
 ) -> std::result::Result<Arc<Mutex<Workspace>>, String> {
@@ -457,7 +813,12 @@ pub fn run() {
             create_custom_dimension,
             create_dimension_value,
             create_smart_graph,
-            delete_smart_graph
+            delete_smart_graph,
+            semantic_settings,
+            save_semantic_provider,
+            test_semantic_provider,
+            rebuild_semantic_index,
+            semantic_search
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grapes");

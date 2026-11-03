@@ -6,6 +6,7 @@ description = "Workspace, filesystem identity, and reconciliation core for Grape
 license = "GPL-3.0-only"
 
 [dependencies]
+base64 = "0.22"
 blake3 = "1.8"
 chrono = { version = "0.4", features = ["serde"] }
 file-id = "0.2.3"
@@ -19,5 +20,12 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[target.'cfg(windows)'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+
+[target.'cfg(not(windows))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }

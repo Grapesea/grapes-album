@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::{load_dimensions, now};
 use crate::error::{GrapesError, Result};
+use crate::semantic::cosine_similarity;
 use crate::types::{
     AssetView, GraphEdge, GraphInfo, GraphNode, GraphNodeKind, GraphView, SmartGraphFilter,
     WorkspaceSnapshot,
@@ -456,6 +457,8 @@ pub fn build_graph_view(
         _ => return Err(GrapesError::State("未知的图谱类型".into())),
     }
 
+    append_semantic_neighbor_edges(conn, &nodes, &mut edges)?;
+
     let mut breadcrumbs = Vec::new();
     let mut current = Some(graph.id.clone());
     while let Some(id) = current {
@@ -903,7 +906,56 @@ fn edge(source: &str, target: &str) -> GraphEdge {
         id: format!("{source}->{target}"),
         source: source.into(),
         target: target.into(),
+        weight: 0.15,
     }
+}
+
+fn append_semantic_neighbor_edges(
+    conn: &Connection,
+    nodes: &[GraphNode],
+    edges: &mut Vec<GraphEdge>,
+) -> Result<()> {
+    let asset_ids = nodes
+        .iter()
+        .filter_map(|node| node.asset_id.clone())
+        .collect::<Vec<_>>();
+    if asset_ids.len() < 2 {
+        return Ok(());
+    }
+    let embeddings = crate::semantic::latest_embeddings(conn)?;
+    let mut seen = HashSet::new();
+    for asset_id in &asset_ids {
+        let Some(vector) = embeddings.get(asset_id) else {
+            continue;
+        };
+        let mut nearest = asset_ids
+            .iter()
+            .filter(|other| *other != asset_id)
+            .filter_map(|other| {
+                let other_vector = embeddings.get(other)?;
+                let similarity = cosine_similarity(vector, other_vector)? as f64;
+                (similarity >= 0.55).then_some((other.clone(), similarity))
+            })
+            .collect::<Vec<_>>();
+        nearest.sort_by(|left, right| right.1.total_cmp(&left.1));
+        for (other, similarity) in nearest.into_iter().take(3) {
+            let pair = if asset_id < &other {
+                (asset_id.clone(), other)
+            } else {
+                (other, asset_id.clone())
+            };
+            if !seen.insert(pair.clone()) {
+                continue;
+            }
+            edges.push(GraphEdge {
+                id: format!("semantic:{}<->{}", pair.0, pair.1),
+                source: format!("asset:{}", pair.0),
+                target: format!("asset:{}", pair.1),
+                weight: 0.25 + similarity * 0.75,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn graph_count(catalog: &[GraphInfo], graph_id: Option<&str>) -> usize {

@@ -4,6 +4,10 @@ import type {
   Dimension,
   GraphInfo,
   GraphView,
+  SemanticIndexResult,
+  SemanticProviderConfig,
+  SemanticSearchResponse,
+  SemanticSettings,
   SmartGraphFilter,
   WorkspaceSnapshot,
 } from "../bindings/types";
@@ -129,4 +133,31 @@ export function createSmartGraph(
 
 export function deleteSmartGraph(graphId: string): Promise<GraphInfo[]> {
   return invoke("delete_smart_graph", { graphId });
+}
+
+export function getSemanticSettings(): Promise<SemanticSettings> {
+  return invoke("semantic_settings");
+}
+
+export function saveSemanticProvider(
+  config: SemanticProviderConfig,
+): Promise<SemanticSettings> {
+  return invoke("save_semantic_provider", { config });
+}
+
+export function testSemanticProvider(
+  kind: "embedding" | "rerank",
+): Promise<string> {
+  return invoke("test_semantic_provider", { kind });
+}
+
+export function rebuildSemanticIndex(): Promise<SemanticIndexResult> {
+  return invoke("rebuild_semantic_index");
+}
+
+export function semanticSearch(
+  query: string,
+  limit: number,
+): Promise<SemanticSearchResponse> {
+  return invoke("semantic_search", { query, limit });
 }

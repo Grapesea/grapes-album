@@ -5,6 +5,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
 
 use crate::error::Result;
+use crate::filesystem::hash_to_hex;
 
 const THUMBNAIL_MAX_EDGE: u32 = 640;
 const THUMBNAIL_QUALITY: u8 = 82;
@@ -90,15 +91,6 @@ fn apply_orientation(image: DynamicImage, orientation: Option<u16>) -> DynamicIm
         8 => image.rotate270(),
         _ => image,
     }
-}
-
-fn hash_to_hex(hash: &[u8]) -> String {
-    let mut output = String::with_capacity(hash.len() * 2);
-    for byte in hash {
-        use std::fmt::Write;
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 #[cfg(test)]

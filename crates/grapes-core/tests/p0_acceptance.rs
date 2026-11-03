@@ -1,7 +1,12 @@
 use std::fs;
 use std::path::Path;
 
-use grapes_core::{GraphNodeKind, SmartGraphFilter, Workspace};
+use std::collections::HashMap;
+
+use grapes_core::{
+    semantic::{classification_alias, fuse_search_results},
+    GraphNodeKind, SemanticAssetRecord, SemanticProviderConfig, SmartGraphFilter, Workspace,
+};
 use rusqlite::Connection;
 
 fn write_photo(path: &Path, contents: &[u8]) {
@@ -35,13 +40,13 @@ fn initializes_sidecar_and_database_migrations() {
     )
     .expect("manifest json");
     assert_eq!(manifest["schemaVersion"], 1);
-    assert_eq!(snapshot.workspace.schema_version, 5);
+    assert_eq!(snapshot.workspace.schema_version, 9);
 
     let connection = Connection::open(temp.path().join(".grapes/grapes.db")).expect("database");
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 5);
+    assert_eq!(version, 9);
     let table_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
@@ -49,13 +54,15 @@ fn initializes_sidecar_and_database_migrations() {
                AND name IN (
                    'folders', 'assets', 'fs_operations', 'asset_tags',
                    'graphs', 'graph_manual_members', 'graph_positions',
-                   'dimensions', 'dimension_values', 'classifications'
+                   'dimensions', 'dimension_values', 'classifications',
+                   'semantic_provider_configs', 'embedding_models',
+                   'asset_embeddings', 'ask_grapes_provider_configs'
                )",
             [],
             |row| row.get(0),
         )
         .expect("table count");
-    assert_eq!(table_count, 10);
+    assert_eq!(table_count, 14);
 }
 
 #[test]
@@ -81,7 +88,7 @@ fn upgrades_an_existing_v1_database_in_place() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        5
+        9
     );
     let connection = Connection::open(database_path).expect("database");
     let operations_table: i64 = connection
@@ -92,6 +99,55 @@ fn upgrades_an_existing_v1_database_in_place() {
         )
         .expect("operations table");
     assert_eq!(operations_table, 1);
+}
+
+#[test]
+fn restores_ask_provider_settings_from_an_interim_schema_8_workspace() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let grapes_dir = temp.path().join(".grapes");
+    fs::create_dir_all(&grapes_dir).expect("sidecar");
+    let database_path = grapes_dir.join("grapes.db");
+    {
+        let connection = Connection::open(&database_path).expect("database");
+        for migration in [
+            include_str!("../src/database/migrations/001_core.sql"),
+            include_str!("../src/database/migrations/002_operations.sql"),
+            include_str!("../src/database/migrations/003_asset_tags.sql"),
+            include_str!("../src/database/migrations/004_graphspaces.sql"),
+            include_str!("../src/database/migrations/005_classifications.sql"),
+            include_str!("../src/database/migrations/006_semantic_search.sql"),
+        ] {
+            connection
+                .execute_batch(migration)
+                .expect("schema migration");
+        }
+        connection
+            .execute(
+                "ALTER TABLE semantic_provider_configs ADD COLUMN api_key TEXT",
+                [],
+            )
+            .expect("interim api key column");
+        connection
+            .pragma_update(None, "user_version", 8)
+            .expect("interim schema version");
+    }
+
+    let workspace = Workspace::open_and_reconcile(temp.path()).expect("upgrade");
+    assert_eq!(
+        workspace
+            .snapshot()
+            .expect("snapshot")
+            .workspace
+            .schema_version,
+        9
+    );
+    assert_eq!(
+        workspace
+            .ask_grapes_provider_config()
+            .expect("restored Ask Grapes settings")
+            .model,
+        "Qwen/Qwen3.5-4B"
+    );
 }
 
 #[test]
@@ -469,6 +525,180 @@ fn classifications_custom_dimensions_and_smart_graphs_persist() {
         .classifications
         .iter()
         .any(|classification| classification.value_id == "dimension:weather:rain"));
+}
+
+#[test]
+fn semantic_provider_vectors_and_fused_search_persist_by_model() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_photo(&temp.path().join("rain.jpg"), b"rainy photo");
+    let workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let asset_id = workspace.snapshot().expect("snapshot").assets[0].id.clone();
+
+    let configs = workspace
+        .semantic_provider_configs()
+        .expect("semantic settings");
+    let embedding = configs
+        .iter()
+        .find(|config| config.kind == "embedding")
+        .expect("embedding settings")
+        .clone();
+    assert_eq!(embedding.provider_type, "siliconflow");
+    assert!(embedding.model.contains("Qwen3-VL-Embedding"));
+    assert!(!embedding.enabled);
+    assert!(configs
+        .iter()
+        .find(|config| config.kind == "rerank")
+        .is_some_and(|config| !config.enabled));
+    let ask_grapes = workspace
+        .ask_grapes_provider_config()
+        .expect("Ask Grapes settings");
+    assert_eq!(ask_grapes.model, "Qwen/Qwen3.5-4B");
+    assert_eq!(ask_grapes.provider_type, "siliconflow");
+    let custom = SemanticProviderConfig {
+        enabled: true,
+        base_url: "https://example.test/v1".into(),
+        model: "custom-vl-embedding".into(),
+        api_key: Some("test-secret-key".into()),
+        ..embedding
+    };
+    workspace
+        .save_semantic_provider(&custom)
+        .expect("save embedding config");
+    let saved = workspace
+        .semantic_provider_configs()
+        .expect("saved settings")
+        .into_iter()
+        .find(|config| config.kind == "embedding")
+        .expect("embedding");
+    assert_eq!(saved.base_url, "https://example.test/v1");
+    assert_eq!(saved.model, "custom-vl-embedding");
+    assert_eq!(saved.api_key.as_deref(), Some("test-secret-key"));
+
+    let model_id = workspace
+        .ensure_semantic_model(&custom, 3)
+        .expect("embedding model");
+    workspace
+        .store_semantic_embedding(&asset_id, &model_id, &[1.0, 0.0, 0.0])
+        .expect("store embedding");
+    let status = workspace
+        .semantic_index_status(&custom)
+        .expect("index status");
+    assert_eq!(status.indexed_assets, 1);
+    assert_eq!(status.pending_assets, 0);
+    assert_eq!(status.dimension, Some(3));
+
+    let records = vec![
+        SemanticAssetRecord {
+            asset_id: asset_id.clone(),
+            filename: "rain.jpg".into(),
+            relative_path: "rain.jpg".into(),
+            combined_text: "rain.jpg 雨天 冷色调 风光".into(),
+            classification_search_terms: vec!["Weather: Rain".into(), "雨".into(), "冷色".into()],
+            metadata_text: "rain.jpg".into(),
+            thumbnail_path: None,
+        },
+        SemanticAssetRecord {
+            asset_id: "other".into(),
+            filename: "sun.jpg".into(),
+            relative_path: "sun.jpg".into(),
+            combined_text: "sun.jpg".into(),
+            classification_search_terms: vec!["Weather: Sunny".into(), "晴".into()],
+            metadata_text: "sun.jpg".into(),
+            thumbnail_path: None,
+        },
+    ];
+    let embeddings = HashMap::from([
+        (asset_id.clone(), vec![1.0, 0.0, 0.0]),
+        ("other".into(), vec![0.0, 1.0, 0.0]),
+    ]);
+    let results = fuse_search_results(
+        "寻找雨天冷色调照片",
+        &records,
+        &embeddings,
+        &[1.0, 0.0, 0.0],
+        10,
+    );
+    assert_eq!(results[0].asset_id, asset_id);
+    assert!(results[0]
+        .match_reasons
+        .iter()
+        .any(|reason| reason.kind == "classification"));
+    assert_eq!(
+        classification_alias("weather", "dimension:weather:rain"),
+        Some("雨")
+    );
+
+    drop(workspace);
+    let reopened = Workspace::open(temp.path()).expect("reopen workspace");
+    assert_eq!(
+        reopened
+            .semantic_provider_configs()
+            .expect("reloaded provider configs")
+            .into_iter()
+            .find(|config| config.kind == "embedding")
+            .and_then(|config| config.api_key)
+            .as_deref(),
+        Some("test-secret-key")
+    );
+    let mut ask_grapes = reopened
+        .ask_grapes_provider_config()
+        .expect("reloaded Ask Grapes config");
+    ask_grapes.api_key = Some("persisted-ask-key".into());
+    reopened
+        .save_semantic_provider(&ask_grapes)
+        .expect("save Ask Grapes key");
+    assert_eq!(
+        reopened
+            .ask_grapes_provider_config()
+            .expect("saved Ask Grapes config")
+            .api_key
+            .as_deref(),
+        Some("persisted-ask-key")
+    );
+}
+
+#[test]
+fn semantic_neighbors_add_layout_weight_without_user_relations() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_photo(&temp.path().join("a.jpg"), b"first");
+    write_photo(&temp.path().join("b.jpg"), b"second");
+    let mut workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let assets = workspace.snapshot().expect("snapshot").assets;
+    assert_eq!(assets.len(), 2);
+    for asset in &assets {
+        workspace
+            .set_asset_tags(&asset.id, &["series".into()])
+            .expect("tag");
+    }
+    let embedding = workspace
+        .semantic_provider_configs()
+        .expect("provider settings")
+        .into_iter()
+        .find(|config| config.kind == "embedding")
+        .expect("embedding");
+    let model_id = workspace
+        .ensure_semantic_model(&embedding, 2)
+        .expect("model");
+    workspace
+        .store_semantic_embedding(&assets[0].id, &model_id, &[1.0, 0.0])
+        .expect("first vector");
+    workspace
+        .store_semantic_embedding(&assets[1].id, &model_id, &[0.99, 0.01])
+        .expect("second vector");
+
+    let tag_graph = workspace
+        .graph_catalog()
+        .expect("catalog")
+        .into_iter()
+        .find(|graph| graph.kind == "value" && graph.name == "series")
+        .expect("tag graph");
+    let view = workspace.graph_view(Some(&tag_graph.id)).expect("tag view");
+    let semantic_edge = view
+        .edges
+        .iter()
+        .find(|edge| edge.id.starts_with("semantic:"))
+        .expect("semantic neighbor edge");
+    assert!(semantic_edge.weight > 0.9);
 }
 
 #[test]

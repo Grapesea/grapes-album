@@ -159,12 +159,13 @@ pub struct GraphNode {
     pub pinned: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphEdge {
     pub id: String,
     pub source: String,
     pub target: String,
+    pub weight: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,4 +175,77 @@ pub struct GraphView {
     pub breadcrumbs: Vec<GraphInfo>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticProviderConfig {
+    pub kind: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub model: String,
+    pub enabled: bool,
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticIndexStatus {
+    pub total_assets: usize,
+    pub indexed_assets: usize,
+    pub pending_assets: usize,
+    pub model_id: Option<String>,
+    pub dimension: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticIndexReport {
+    pub indexed: usize,
+    pub failed: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticMatchReason {
+    pub kind: String,
+    pub label: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSearchResult {
+    pub asset_id: String,
+    pub filename: String,
+    pub relative_path: String,
+    pub score: f64,
+    pub match_reasons: Vec<SemanticMatchReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSearchResponse {
+    pub candidate_count: usize,
+    pub reranked: bool,
+    pub results: Vec<SemanticSearchResult>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticIndexSource {
+    pub asset_id: String,
+    pub thumbnail_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticAssetRecord {
+    pub asset_id: String,
+    pub filename: String,
+    pub relative_path: String,
+    pub combined_text: String,
+    pub classification_search_terms: Vec<String>,
+    pub metadata_text: String,
+    pub thumbnail_path: Option<std::path::PathBuf>,
 }

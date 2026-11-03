@@ -15,11 +15,9 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleAlert,
-  Database,
   FileImage,
   Folder as FolderIcon,
   FolderPlus,
-  GitBranch,
   HardDrive,
   LoaderCircle,
   Pencil,
@@ -36,6 +34,7 @@ import {
   createDimensionValue,
   desktopRuntime,
   getClassificationSchema,
+  getSemanticSettings,
   getWorkspaceSnapshot,
   moveAsset,
   moveFolder,
@@ -43,6 +42,7 @@ import {
   reconcileWorkspace,
   renameAsset,
   renameFolder,
+  semanticSearch,
   setAssetClassification,
   setAssetTags,
 } from "./api/workspace";
@@ -52,6 +52,7 @@ import type {
   Dimension,
   FolderView,
   ReconcileReport,
+  SemanticSearchResponse,
   WorkspaceSnapshot,
 } from "./bindings/types";
 import { FileTree } from "./components/FileTree";
@@ -66,7 +67,13 @@ import {
 } from "./classificationLabels";
 import { VirtualGallery } from "./components/VirtualGallery";
 import { PhotoWorkspace } from "./components/PhotoWorkspace";
+import { SemanticSearchPanel } from "./components/SemanticSearchPanel";
 import { absoluteWorkspacePath } from "./utils/paths";
+import {
+  formatBytes,
+  formatModifiedAt,
+  normalizeError,
+} from "./utils/format";
 import { SidebarResizer } from "./components/SidebarResizer";
 const GraphWorkspace = lazy(() =>
   import("./components/GraphWorkspace").then((module) => ({
@@ -110,10 +117,21 @@ export default function App() {
     [],
   );
   const [graphRevision, setGraphRevision] = useState(0);
+  const [askGrapesModel, setAskGrapesModel] = useState("Qwen/Qwen3.5-4B");
+  const [semanticPanel, setSemanticPanel] = useState<
+    "results" | "settings" | null
+  >(null);
+  const [askQuery, setAskQuery] = useState("");
+  const [semanticResponse, setSemanticResponse] =
+    useState<SemanticSearchResponse | null>(null);
+  const [semanticSearching, setSemanticSearching] = useState(false);
 
   useEffect(() => {
     setGraphId("graphspaces");
     setGraphPhotoIds([]);
+    setSemanticPanel(null);
+    setSemanticResponse(null);
+    setAskQuery("");
   }, [snapshot?.workspace.id]);
 
   const workspaceWidth = () =>
@@ -196,6 +214,21 @@ export default function App() {
       disposed = true;
     };
   }, [snapshot?.workspace.id, t]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    let disposed = false;
+    getSemanticSettings()
+      .then((settings) => {
+        if (!disposed) setAskGrapesModel(settings.qa.model);
+      })
+      .catch(() => {
+        // The sidebar retains the documented default before settings load.
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [snapshot?.workspace.id]);
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot) => {
     setSnapshot(next);
@@ -352,8 +385,6 @@ export default function App() {
     }
   };
 
-  const selectedFolder =
-    snapshot?.folders.find((folder) => folder.id === selectedFolderId) ?? null;
   const selectedAsset =
     snapshot?.assets.find((asset) => asset.id === selectedAssetId) ?? null;
   const currentFolderId =
@@ -439,6 +470,21 @@ export default function App() {
   const openPhoto = (asset: AssetView) => {
     selectAsset(asset);
     setPhotoOpen(true);
+  };
+
+  const submitAskSearch = async () => {
+    const query = askQuery.trim();
+    if (!query || semanticSearching) return;
+    setSemanticSearching(true);
+    setError(null);
+    try {
+      setSemanticResponse(await semanticSearch(query, 20));
+      setSemanticPanel("results");
+    } catch (caught) {
+      setError(normalizeError(caught, t("operationFailed")));
+    } finally {
+      setSemanticSearching(false);
+    }
   };
 
   const createClassificationDimension = async (name: string) => {
@@ -538,18 +584,11 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-lockup">
-          <BrandMark />
-          <div>
-            <strong>{t("brandName")}</strong>
-          </div>
-        </div>
         <label className="search-box">
           <Search size={16} />
           <input
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
-            placeholder={t("filterPlaceholder")}
           />
         </label>
         <LanguageSwitcher />
@@ -568,8 +607,8 @@ export default function App() {
         <button
           type="button"
           className="icon-button"
-          title={t("settings")}
-          disabled
+          title={t("semanticProviderSettings")}
+          onClick={() => setSemanticPanel("settings")}
         >
           <Settings size={17} />
         </button>
@@ -637,19 +676,43 @@ export default function App() {
             />
           </div>
           <div className="sidebar-bottom">
-            <div className="ask-grapes">
-              <div className="ask-heading">
+            <form
+              className="ask-grapes"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitAskSearch();
+              }}
+            >
+              <span className="ask-heading">
                 <span className="ask-icon">
                   <Sparkles size={15} />
                 </span>
                 <strong>Ask Grapes</strong>
                 <span className="status-dot" />
-                <span className="provider-model">Qwen3.5-0.8B</span>
-              </div>
-              <div className="ask-input">
-                {t("askPlaceholder")}
-              </div>
-            </div>
+                <span className="provider-model">{askGrapesModel}</span>
+              </span>
+              <span className="ask-input">
+                <input
+                  value={askQuery}
+                  onChange={(event) => setAskQuery(event.target.value)}
+                  placeholder={t("askPlaceholder")}
+                  aria-label={t("semanticSearch")}
+                  disabled={semanticSearching}
+                />
+                <button
+                  type="submit"
+                  title={t("semanticFind")}
+                  aria-label={t("semanticFind")}
+                  disabled={semanticSearching || !askQuery.trim()}
+                >
+                  {semanticSearching ? (
+                    <LoaderCircle className="spin" size={13} />
+                  ) : (
+                    <Search size={13} />
+                  )}
+                </button>
+              </span>
+            </form>
           </div>
         </aside>
 
@@ -885,7 +948,6 @@ export default function App() {
             ).length
           }
           folderCount={childFolders.length}
-          workspaceRootPath={snapshot.workspace.rootPath}
           classificationSchema={classificationSchema}
           classificationBusy={busy !== null}
           onSetClassification={updateClassification}
@@ -902,6 +964,22 @@ export default function App() {
           }}
         />
       </div>
+
+      {semanticPanel && (
+        <SemanticSearchPanel
+          assets={snapshot.assets}
+          initialTab={semanticPanel}
+          initialResponse={semanticResponse}
+          onClose={() => setSemanticPanel(null)}
+          onOpenAsset={(asset) => {
+            selectAsset(asset);
+            setPhotoOpen(true);
+            setSemanticPanel(null);
+          }}
+          onError={setError}
+          onAskModelChange={setAskGrapesModel}
+        />
+      )}
 
       <footer className="statusbar">
         <span>
@@ -967,24 +1045,6 @@ function BrandMark() {
         <i />
       </span>
     </span>
-  );
-}
-
-function WelcomeFeature({
-  icon,
-  title,
-  text,
-}: {
-  icon: ReactNode;
-  title: string;
-  text: string;
-}) {
-  return (
-    <div className="welcome-feature">
-      <span>{icon}</span>
-      <strong>{title}</strong>
-      <p>{text}</p>
-    </div>
   );
 }
 
@@ -1063,35 +1123,4 @@ function AssetClassifications({
       )}
     </span>
   );
-}
-
-function formatModifiedAt(
-  mtimeNs: number,
-  locale: "zh" | "en",
-  unknown: string,
-) {
-  const date = new Date(Math.floor(mtimeNs / 1_000_000));
-  if (Number.isNaN(date.getTime())) return unknown;
-  return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function normalizeError(error: unknown, fallback: string) {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return fallback;
 }

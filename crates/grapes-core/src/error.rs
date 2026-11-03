@@ -20,6 +20,10 @@ pub enum GrapesError {
     NotFound(String),
     #[error("工作区状态不可用：{0}")]
     State(String),
+    #[error("网络请求失败：{0}")]
+    Network(String),
+    #[error("AI Provider 返回错误：{0}")]
+    Provider(String),
 }
 
 pub type Result<T> = std::result::Result<T, GrapesError>;

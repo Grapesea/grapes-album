@@ -16,7 +16,11 @@ import {
 } from "lucide-react";
 import type { AssetView, Dimension, FolderView } from "../bindings/types";
 import { useI18n } from "../i18n";
-import { absoluteWorkspacePath } from "../utils/paths";
+import {
+  fileExtension,
+  formatBytes,
+  formatModifiedAt,
+} from "../utils/format";
 import { Histogram } from "./Histogram";
 import { ClassificationEditor } from "./ClassificationEditor";
 
@@ -25,7 +29,6 @@ interface InspectorProps {
   folder: FolderView | null;
   assetCount: number;
   folderCount: number;
-  workspaceRootPath: string;
   classificationSchema: Dimension[];
   classificationBusy: boolean;
   onSetClassification: (
@@ -47,7 +50,6 @@ export function Inspector({
   folder,
   assetCount,
   folderCount,
-  workspaceRootPath,
   classificationSchema,
   classificationBusy,
   onSetClassification,
@@ -150,7 +152,7 @@ export function Inspector({
           <InfoRow
             icon={<FileType2 size={14} />}
             label={t("format")}
-            value={extensionOf(asset.filename)}
+            value={fileExtension(asset.filename, 5)}
           />
           <InfoRow
             icon={<HardDrive size={14} />}
@@ -341,34 +343,4 @@ function InfoRow({
       </span>
     </div>
   );
-}
-
-function extensionOf(filename: string) {
-  const extension = filename.split(".").pop();
-  return extension ? extension.toUpperCase().slice(0, 5) : "IMG";
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function formatModifiedAt(
-  mtimeNs: number,
-  locale: "zh" | "en",
-  unknown: string,
-) {
-  const date = new Date(Math.floor(mtimeNs / 1_000_000));
-  if (Number.isNaN(date.getTime())) return unknown;
-  return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

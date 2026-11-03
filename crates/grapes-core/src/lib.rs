@@ -3,6 +3,7 @@ pub mod error;
 pub mod filesystem;
 pub mod graph;
 pub mod media;
+pub mod semantic;
 pub mod types;
 pub mod watcher;
 pub mod workspace;
@@ -10,7 +11,9 @@ pub mod workspace;
 pub use error::{GrapesError, Result};
 pub use types::{
     AssetClassificationView, AssetView, DimensionValueView, DimensionView, FolderView, GraphEdge,
-    GraphInfo, GraphNode, GraphNodeKind, GraphView, ReconcileReport, SmartGraphFilter,
+    GraphInfo, GraphNode, GraphNodeKind, GraphView, ReconcileReport, SemanticAssetRecord,
+    SemanticIndexReport, SemanticIndexSource, SemanticIndexStatus, SemanticMatchReason,
+    SemanticProviderConfig, SemanticSearchResponse, SemanticSearchResult, SmartGraphFilter,
     WorkspaceSnapshot, WorkspaceView,
 };
 pub use watcher::WorkspaceWatcher;

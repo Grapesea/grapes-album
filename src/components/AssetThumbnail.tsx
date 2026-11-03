@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import type { AssetView } from "../bindings/types";
 import { thumbnailUrl } from "../api/thumbnails";
+import { fileExtension } from "../utils/format";
 
 export function AssetThumbnail({
   asset,
@@ -21,7 +22,7 @@ export function AssetThumbnail({
     return (
       <span className={`asset-thumb fallback ${className}`.trim()}>
         <ImageIcon size={17} />
-        <small>{extension(asset.filename)}</small>
+        <small>{fileExtension(asset.filename)}</small>
       </span>
     );
   }
@@ -37,8 +38,4 @@ export function AssetThumbnail({
       />
     </span>
   );
-}
-
-function extension(filename: string) {
-  return (filename.split(".").pop() ?? "IMG").toUpperCase().slice(0, 4);
 }

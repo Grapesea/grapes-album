@@ -122,7 +122,9 @@ export function createGrapeGraph(view: GraphView, resetPositions: boolean) {
       edge.source !== edge.target &&
       !graph.hasEdge(edge.source, edge.target)
     ) {
-      graph.addEdge(edge.source, edge.target, { weight: 0.15 });
+      graph.addEdge(edge.source, edge.target, {
+        weight: Number.isFinite(edge.weight) ? edge.weight : 0.15,
+      });
     }
   }
   const rootId = root?.id ?? nodes[0].id;

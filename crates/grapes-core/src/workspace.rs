@@ -2,15 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::database::{
     insert_asset_tx, insert_folder_tx, load_asset_classifications, load_asset_tags, load_assets,
-    load_folders, record_reconcile_tx, update_asset_tx, update_folder_tx, AssetRow, AssetWrite,
-    Database, FolderRow, DATABASE_SCHEMA_VERSION,
+    load_folders, now, record_reconcile_tx, update_asset_tx, update_folder_tx, AssetRow,
+    AssetWrite, Database, FolderRow, DATABASE_SCHEMA_VERSION,
 };
 use crate::error::{GrapesError, Result};
 use crate::filesystem::{
@@ -20,9 +19,11 @@ use crate::filesystem::{
 use crate::graph;
 use crate::media::thumbnail::thumbnail_path;
 use crate::media::{ensure_thumbnail, extract_metadata, MediaMetadata, ThumbnailResult};
+use crate::semantic;
 use crate::types::{
     AssetView, DimensionValueView, DimensionView, FolderView, GraphInfo, GraphView,
-    ReconcileReport, SmartGraphFilter, WorkspaceSnapshot, WorkspaceView,
+    ReconcileReport, SemanticAssetRecord, SemanticIndexSource, SemanticIndexStatus,
+    SemanticProviderConfig, SmartGraphFilter, WorkspaceSnapshot, WorkspaceView,
 };
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -786,6 +787,124 @@ impl Workspace {
         }
     }
 
+    pub fn semantic_provider_configs(&self) -> Result<Vec<SemanticProviderConfig>> {
+        semantic::load_provider_configs(&self.db.conn)
+    }
+
+    pub fn save_semantic_provider(&self, config: &SemanticProviderConfig) -> Result<()> {
+        if config.kind == "qa" {
+            semantic::save_ask_grapes_provider(&self.db.conn, config)
+        } else {
+            semantic::save_provider_config(&self.db.conn, config)
+        }
+    }
+
+    pub fn ask_grapes_provider_config(&self) -> Result<SemanticProviderConfig> {
+        semantic::load_ask_grapes_provider(&self.db.conn)
+    }
+
+    pub fn semantic_index_status(
+        &self,
+        config: &SemanticProviderConfig,
+    ) -> Result<SemanticIndexStatus> {
+        let total_assets = self.db.assets()?.len();
+        semantic::index_status(&self.db.conn, total_assets, config)
+    }
+
+    pub fn ensure_semantic_model(
+        &self,
+        config: &SemanticProviderConfig,
+        dimension: usize,
+    ) -> Result<String> {
+        semantic::ensure_embedding_model(&self.db.conn, config, dimension)
+    }
+
+    pub fn pending_semantic_index_sources(
+        &self,
+        model_id: &str,
+    ) -> Result<Vec<SemanticIndexSource>> {
+        let indexed = semantic::indexed_asset_ids(&self.db.conn, model_id)?;
+        Ok(self
+            .semantic_index_sources()?
+            .into_iter()
+            .filter(|source| !indexed.contains(&source.asset_id))
+            .collect())
+    }
+
+    pub fn semantic_index_sources(&self) -> Result<Vec<SemanticIndexSource>> {
+        let snapshot = self.snapshot()?;
+        Ok(snapshot
+            .assets
+            .into_iter()
+            .filter_map(|asset| {
+                self.asset_thumbnail_path(&asset.id)
+                    .ok()
+                    .map(|thumbnail_path| SemanticIndexSource {
+                        asset_id: asset.id,
+                        thumbnail_path,
+                    })
+            })
+            .collect())
+    }
+
+    pub fn store_semantic_embedding(
+        &self,
+        asset_id: &str,
+        model_id: &str,
+        vector: &[f32],
+    ) -> Result<()> {
+        semantic::store_embedding(&self.db.conn, asset_id, model_id, vector)
+    }
+
+    pub fn semantic_assets(&self) -> Result<Vec<SemanticAssetRecord>> {
+        let snapshot = self.snapshot()?;
+        Ok(snapshot
+            .assets
+            .into_iter()
+            .map(|asset| {
+                let mut classification_search_terms = Vec::new();
+                for classification in &asset.classifications {
+                    let label = format!(
+                        "{}: {}",
+                        classification.dimension_name, classification.value_name
+                    );
+                    classification_search_terms.push(label);
+                    if let Some(alias) = semantic::classification_alias(
+                        &classification.dimension_kind,
+                        &classification.value_id,
+                    ) {
+                        classification_search_terms.push(alias.to_owned());
+                    }
+                }
+                let metadata_text = [
+                    asset.filename.clone(),
+                    asset.relative_path.clone(),
+                    asset.tags.join(" "),
+                    asset.metadata.camera_make.clone().unwrap_or_default(),
+                    asset.metadata.camera_model.clone().unwrap_or_default(),
+                    asset.metadata.lens_model.clone().unwrap_or_default(),
+                    asset.metadata.captured_at.clone().unwrap_or_default(),
+                ]
+                .join(" ");
+                let combined_text =
+                    format!("{metadata_text} {}", classification_search_terms.join(" "));
+                SemanticAssetRecord {
+                    thumbnail_path: self.asset_thumbnail_path(&asset.id).ok(),
+                    asset_id: asset.id,
+                    filename: asset.filename,
+                    relative_path: asset.relative_path,
+                    combined_text,
+                    classification_search_terms,
+                    metadata_text,
+                }
+            })
+            .collect())
+    }
+
+    pub fn semantic_embeddings(&self, model_id: &str) -> Result<HashMap<String, Vec<f32>>> {
+        semantic::load_embeddings(&self.db.conn, model_id)
+    }
+
     pub fn graph_catalog(&self) -> Result<Vec<GraphInfo>> {
         let snapshot = self.snapshot()?;
         graph::graph_catalog(&snapshot, &self.db.conn)
@@ -1143,10 +1262,6 @@ fn validate_classification_name(name: &str) -> Result<()> {
         return Err(GrapesError::InvalidPath("分类名称不能包含控制字符".into()));
     }
     Ok(())
-}
-
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn user_visible_path(path: &str) -> String {

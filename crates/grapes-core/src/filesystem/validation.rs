@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn validates_cross_platform_safe_names() {
         assert!(validate_name("Vancouver 2026").is_ok());
-        assert!(validate_name("照片.jpg").is_ok());
+        assert!(validate_name("相片.jpg").is_ok());
         assert!(validate_name("").is_err());
         assert!(validate_name("bad/name").is_err());
         assert!(validate_name("CON.txt").is_err());

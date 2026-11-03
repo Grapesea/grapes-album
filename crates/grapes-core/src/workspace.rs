@@ -356,7 +356,7 @@ impl Workspace {
                 .get(&scanned.folder_path)
                 .cloned()
                 .ok_or_else(|| {
-                    GrapesError::State(format!("照片所在目录未建立：{}", scanned.folder_path))
+                    GrapesError::State(format!("相片所在目录未建立：{}", scanned.folder_path))
                 })?;
 
             let mut matched = old_assets.iter().find(|asset| {
@@ -442,7 +442,7 @@ impl Workspace {
                 }
                 if matched.is_none() && moved_hash_candidates.len() > 1 {
                     report.warnings.push(format!(
-                        "{} 存在多个相同内容候选，无法稳定判定身份，已按新照片处理",
+                        "{} 存在多个相同内容候选，无法稳定判定身份，已按新相片处理",
                         scanned.relative_path
                     ));
                 }
@@ -723,7 +723,7 @@ impl Workspace {
         validate_name(new_name)?;
         if !is_image_file(Path::new(new_name)) {
             return Err(GrapesError::InvalidPath(
-                "照片文件名必须保留受支持的图片扩展名".into(),
+                "相片文件名必须保留受支持的图片扩展名".into(),
             ));
         }
         let asset = self.db.asset(asset_id)?;
@@ -735,7 +735,7 @@ impl Workspace {
         self.db.asset(asset_id)?;
         if tags.len() > 20 {
             return Err(GrapesError::InvalidPath(
-                "每张照片最多添加 20 个标签".into(),
+                "每张相片最多添加 20 个标签".into(),
             ));
         }
 
@@ -765,12 +765,12 @@ impl Workspace {
         let asset = self.db.asset(asset_id)?;
         let hash = asset
             .content_hash
-            .ok_or_else(|| GrapesError::NotFound("照片缩略图尚未生成".into()))?;
+            .ok_or_else(|| GrapesError::NotFound("相片缩略图尚未生成".into()))?;
         let path = thumbnail_path(&self.root.join(".grapes/thumbnails"), &hash);
         if path.is_file() {
             Ok(path)
         } else {
-            Err(GrapesError::NotFound("照片缩略图尚未生成".into()))
+            Err(GrapesError::NotFound("相片缩略图尚未生成".into()))
         }
     }
 
@@ -779,12 +779,12 @@ impl Workspace {
         let paths = self.folder_paths()?;
         let parent = paths
             .get(&asset.folder_id)
-            .ok_or_else(|| GrapesError::State("照片目录不可解析".into()))?;
+            .ok_or_else(|| GrapesError::State("相片目录不可解析".into()))?;
         let path = path_from_relative(&self.root, parent).join(asset.filename);
         if path.is_file() {
             Ok(path)
         } else {
-            Err(GrapesError::NotFound("照片文件不存在".into()))
+            Err(GrapesError::NotFound("相片文件不存在".into()))
         }
     }
 
@@ -1069,7 +1069,7 @@ impl Workspace {
         let source_parent = paths
             .get(&asset.folder_id)
             .cloned()
-            .ok_or_else(|| GrapesError::State("源照片目录不可解析".into()))?;
+            .ok_or_else(|| GrapesError::State("源相片目录不可解析".into()))?;
         let destination_parent = paths
             .get(destination_folder_id)
             .cloned()
@@ -1083,7 +1083,7 @@ impl Workspace {
         }
         if !source.is_file() {
             return Err(GrapesError::NotFound(format!(
-                "原照片不存在：{}",
+                "原相片不存在：{}",
                 source.display()
             )));
         }

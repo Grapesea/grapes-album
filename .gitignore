@@ -1,10 +1,13 @@
 /Design.md
+
 node_modules/
 dist/
 target/
+.cache/
+
 *.log
 .DS_Store
-.cache/
+
 nul
 /README.md
 src-tauri/gen/schemas/

@@ -715,7 +715,7 @@ async fn run_semantic_search(
 ) -> std::result::Result<SemanticSearchResponse, String> {
     let query = query.trim().to_owned();
     if query.is_empty() {
-        return Err("请输入要查找的照片描述".into());
+        return Err("请输入要查找的相片描述".into());
     }
     emit_ask_progress(
         app,
@@ -959,12 +959,12 @@ async fn run_semantic_search(
         started,
         "retrieval",
         "success",
-        format!("候选照片检索完成：{candidate_count} 张"),
+        format!("候选相片检索完成：{candidate_count} 张"),
         None,
     );
     if embedding_used && status.pending_assets > 0 {
         warnings.push(format!(
-            "{} 张照片尚未生成语义向量，当前结果只使用已索引照片",
+            "{} 张相片尚未生成语义向量，当前结果只使用已索引相片",
             status.pending_assets
         ));
     }
@@ -1001,7 +1001,7 @@ async fn run_semantic_search(
                         started,
                         "rerank",
                         "waiting",
-                        "正在重排序候选照片",
+                        "正在重排序候选相片",
                         Some(format!(
                             "{} · {} · {} candidates",
                             rerank_config.base_url,
@@ -1026,7 +1026,7 @@ async fn run_semantic_search(
                                 started,
                                 "rerank",
                                 "success",
-                                "候选照片重排序完成",
+                                "候选相片重排序完成",
                                 Some(format!("mode {}", outcome.mode)),
                             );
                             if outcome.mode == "text" {
@@ -1129,12 +1129,12 @@ fn local_search_answer(plan: &SearchPlan, results: &[grapes_core::SemanticSearch
         .collect::<Vec<_>>()
         .join("、");
     if results.is_empty() {
-        "没有找到符合当前条件的照片。".into()
+        "没有找到符合当前条件的相片。".into()
     } else if filters.is_empty() {
-        format!("找到 {} 张相关照片：{names}", results.len())
+        format!("找到 {} 张相关相片：{names}", results.len())
     } else {
         format!(
-            "找到 {} 张相关照片：{names}。主要条件：{}",
+            "找到 {} 张相关相片：{names}。主要条件：{}",
             results.len(),
             filters.join("；")
         )

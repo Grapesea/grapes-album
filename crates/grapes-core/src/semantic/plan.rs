@@ -184,14 +184,14 @@ fn plan_system_prompt(dimensions: &[DimensionView]) -> String {
     )
     .unwrap_or_else(|_| "[]".into());
     format!(
-        r#"你是 Grapes 照片检索查询规划器。只输出一个 JSON 对象，不要 Markdown。
+        r#"你是 Grapes 相片检索查询规划器。只输出一个 JSON 对象，不要 Markdown。
 JSON 必须符合以下结构：
 {{
   "hardFilters": [{{"dimensionId": "必须来自可用维度", "valueIds": ["必须来自该维度"]}}],
   "softFilters": [{{"dimensionId": "...", "valueIds": ["..."]}}],
   "semanticQueries": ["用于多模态向量检索的简短视觉描述"],
   "exclusions": ["需要排除的视觉或分类词语"],
-  "rerankInstruction": "对候选照片重新排序的简短说明"
+  "rerankInstruction": "对候选相片重新排序的简短说明"
 }}
 hardFilters 表示必须同时满足的分类条件；softFilters 表示加分条件。
 不要把不确定条件放入 hardFilters。semanticQueries 最多 4 条。

@@ -624,7 +624,7 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
         ("other".into(), vec![0.0, 1.0, 0.0]),
     ]);
     let results = fuse_search_results(
-        "寻找雨天冷色调照片",
+        "寻找雨天冷色调相片",
         &records,
         &embeddings,
         &[1.0, 0.0, 0.0],
@@ -646,7 +646,7 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
             value_ids: vec!["dimension:weather:snow".into()],
             value_names: vec!["Snow".into()],
         }],
-        semantic_queries: vec!["雨天冷色调照片".into()],
+        semantic_queries: vec!["雨天冷色调相片".into()],
         ..SearchPlan::default()
     };
     let (relaxed_results, relaxation) = fuse_plan_search_relaxed(

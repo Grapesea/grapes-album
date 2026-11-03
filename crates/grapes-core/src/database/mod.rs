@@ -151,7 +151,7 @@ impl Database {
                 map_asset,
             )
             .optional()?
-            .ok_or_else(|| GrapesError::NotFound(format!("照片 {id}")))
+            .ok_or_else(|| GrapesError::NotFound(format!("相片 {id}")))
     }
 
     pub fn insert_folder(&self, folder: &FolderRow) -> Result<()> {

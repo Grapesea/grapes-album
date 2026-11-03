@@ -61,6 +61,7 @@ import { Inspector } from "./components/Inspector";
 import { AssetTags } from "./components/AssetTags";
 import { AssetThumbnail } from "./components/AssetThumbnail";
 import { TitleBar } from "./components/TitleBar";
+import { BrandMark } from "./components/BrandMark";
 import { useI18n } from "./i18n";
 import {
   classificationValueDisplayName,
@@ -101,6 +102,7 @@ export default function App() {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const expandedWorkspaceId = useRef<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -255,10 +257,13 @@ export default function App() {
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot) => {
     setSnapshot(next);
+    const workspaceChanged =
+      expandedWorkspaceId.current !== next.workspace.id;
+    expandedWorkspaceId.current = next.workspace.id;
     setExpanded((current) => {
-      const merged = new Set(current);
-      for (const folder of next.folders) merged.add(folder.id);
-      return merged;
+      if (workspaceChanged) return new Set([next.rootFolderId]);
+      const existing = new Set(next.folders.map((folder) => folder.id));
+      return new Set([...current].filter((folderId) => existing.has(folderId)));
     });
     setSelectedFolderId((current) => {
       if (current && next.folders.some((folder) => folder.id === current)) {
@@ -769,9 +774,6 @@ export default function App() {
               }}
             >
               <span className="ask-heading">
-                <span className="ask-icon">
-                  <Sparkles size={15} />
-                </span>
                 <strong>Ask Grapes</strong>
                 <span className="status-dot" />
                 <span className="provider-model">{askGrapesModel}</span>
@@ -1184,21 +1186,6 @@ function storedSidebarWidth(key: string, fallback: number, min: number) {
   } catch {
     return fallback;
   }
-}
-
-function BrandMark() {
-  return (
-    <span className="brand-mark" aria-hidden="true">
-      <span className="grape-leaf" />
-      <span className="grape-body">
-        <i />
-        <i />
-        <i />
-        <i />
-        <i />
-      </span>
-    </span>
-  );
 }
 
 function Stat({

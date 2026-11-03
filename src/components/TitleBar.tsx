@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Copy, Grape, Minus, RefreshCw, Settings, Square, X } from "lucide-react";
+import { Copy, Minus, RefreshCw, Settings, Square, X } from "lucide-react";
 import { desktopRuntime } from "../api/workspace";
 import { useI18n } from "../i18n";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { BrandMark } from "./BrandMark";
 
 interface TitleBarProps {
   workspaceOpen: boolean;
@@ -43,7 +44,7 @@ export function TitleBar({
 
   return (
     <header className="titlebar">
-      <span className="titlebar-brand" aria-hidden="true"><Grape size={19} /></span>
+      <span className="titlebar-brand" aria-hidden="true"><BrandMark /></span>
       <nav className="titlebar-actions" aria-label={t("appMenu")}>
         <button type="button" className="titlebar-action" title={t("semanticProviderSettings")}
           disabled={!workspaceOpen} onClick={onSettings}>

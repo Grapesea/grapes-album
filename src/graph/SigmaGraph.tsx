@@ -636,7 +636,13 @@ export function SigmaGraph({
               }
               style={{ background: graphNodeColor(inspected, view) }}
             />
-            <strong>{displayNodeLabel(inspected, locale)}</strong>
+            <strong>
+              {displayNodeLabel(inspected, locale)}
+              {(inspected.kind === "portal" || inspected.subtitle) && " · "}
+              {inspected.kind === "portal"
+                ? t("photoCount", { count: inspected.photoCount })
+                : inspected.subtitle}
+            </strong>
             <button
               type="button"
               aria-label={t("closePanel")}
@@ -645,11 +651,6 @@ export function SigmaGraph({
               <X size={12} />
             </button>
           </div>
-          <span>
-            {inspected.kind === "portal"
-              ? t("photoCount", { count: inspected.photoCount })
-              : inspected.subtitle}
-          </span>
           {!nodeDestination(inspected) ? (
             <small>{t("graphUnavailable")}</small>
           ) : (

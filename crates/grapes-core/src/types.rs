@@ -186,6 +186,9 @@ pub struct SemanticProviderConfig {
     pub model: String,
     pub enabled: bool,
     pub api_key: Option<String>,
+    pub request_timeout_ms: u64,
+    pub max_concurrency: usize,
+    pub max_retries: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -227,10 +230,40 @@ pub struct SemanticSearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticSearchResponse {
+    pub query: String,
+    pub answer: Option<String>,
+    pub search_plan: Option<SearchPlan>,
+    pub plan_source: String,
+    pub embedding_used: bool,
     pub candidate_count: usize,
     pub reranked: bool,
     pub results: Vec<SemanticSearchResult>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPlan {
+    pub hard_filters: Vec<SearchPlanFilter>,
+    pub soft_filters: Vec<SearchPlanFilter>,
+    pub semantic_queries: Vec<String>,
+    pub exclusions: Vec<String>,
+    pub rerank_instruction: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPlanFilter {
+    pub dimension_id: String,
+    pub dimension_name: String,
+    pub value_ids: Vec<String>,
+    pub value_names: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticClassificationValue {
+    pub dimension_id: String,
+    pub value_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +279,7 @@ pub struct SemanticAssetRecord {
     pub relative_path: String,
     pub combined_text: String,
     pub classification_search_terms: Vec<String>,
+    pub classification_values: Vec<SemanticClassificationValue>,
     pub metadata_text: String,
     pub thumbnail_path: Option<std::path::PathBuf>,
 }

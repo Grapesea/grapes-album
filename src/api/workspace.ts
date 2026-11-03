@@ -146,7 +146,7 @@ export function saveSemanticProvider(
 }
 
 export function testSemanticProvider(
-  kind: "embedding" | "rerank",
+  kind: "qa" | "embedding" | "rerank",
 ): Promise<string> {
   return invoke("test_semantic_provider", { kind });
 }
@@ -158,6 +158,11 @@ export function rebuildSemanticIndex(): Promise<SemanticIndexResult> {
 export function semanticSearch(
   query: string,
   limit: number,
+  requestId: string,
 ): Promise<SemanticSearchResponse> {
-  return invoke("semantic_search", { query, limit });
+  return invoke("semantic_search", { query, limit, requestId });
+}
+
+export function cancelAskGrapes(requestId: string): Promise<boolean> {
+  return invoke("cancel_ask_grapes", { requestId });
 }

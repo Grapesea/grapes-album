@@ -152,6 +152,9 @@ export interface SemanticProviderConfig {
   model: string;
   enabled: boolean;
   apiKey: string | null;
+  requestTimeoutMs: number;
+  maxConcurrency: number;
+  maxRetries: number;
 }
 
 export interface SemanticSettings {
@@ -195,10 +198,48 @@ export interface SemanticSearchResult {
 }
 
 export interface SemanticSearchResponse {
+  query: string;
+  answer: string | null;
+  searchPlan: SearchPlan | null;
+  planSource: "qa" | "fallback";
+  embeddingUsed: boolean;
   candidateCount: number;
   reranked: boolean;
   results: SemanticSearchResult[];
   warnings: string[];
+}
+
+export interface AskGrapesProgress {
+  requestId: string;
+  stage:
+    | "query"
+    | "planning"
+    | "embedding"
+    | "retrieval"
+    | "rerank"
+    | "answer"
+    | "complete"
+    | "cancelled"
+    | "error";
+  state: "started" | "waiting" | "success" | "warning" | "error";
+  message: string;
+  detail: string | null;
+  elapsedMs: number;
+}
+
+export interface SearchPlanFilter {
+  dimensionId: string;
+  dimensionName: string;
+  valueIds: string[];
+  valueNames: string[];
+}
+
+export interface SearchPlan {
+  hardFilters: SearchPlanFilter[];
+  softFilters: SearchPlanFilter[];
+  semanticQueries: string[];
+  exclusions: string[];
+  rerankInstruction: string | null;
 }
 
 export type DragPayload =

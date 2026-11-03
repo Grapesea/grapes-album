@@ -9,7 +9,6 @@ export function LanguageSwitcher({ className = "" }: { className?: string }) {
       role="group"
       aria-label={t("language")}
     >
-      <Languages size={14} aria-hidden="true" />
       <button
         type="button"
         className={locale === "zh" ? "active" : ""}

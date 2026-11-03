@@ -18,6 +18,7 @@
         "minWidth": 960,
         "minHeight": 620,
         "resizable": true,
+        "decorations": false,
         "fullscreen": false,
         "center": true,
         "backgroundColor": "#17141d"

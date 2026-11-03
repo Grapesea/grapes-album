@@ -22,8 +22,9 @@ use crate::media::{ensure_thumbnail, extract_metadata, MediaMetadata, ThumbnailR
 use crate::semantic;
 use crate::types::{
     AssetView, DimensionValueView, DimensionView, FolderView, GraphInfo, GraphView,
-    ReconcileReport, SemanticAssetRecord, SemanticIndexSource, SemanticIndexStatus,
-    SemanticProviderConfig, SmartGraphFilter, WorkspaceSnapshot, WorkspaceView,
+    ReconcileReport, SemanticAssetRecord, SemanticClassificationValue, SemanticIndexSource,
+    SemanticIndexStatus, SemanticProviderConfig, SmartGraphFilter, WorkspaceSnapshot,
+    WorkspaceView,
 };
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -863,12 +864,17 @@ impl Workspace {
             .into_iter()
             .map(|asset| {
                 let mut classification_search_terms = Vec::new();
+                let mut classification_values = Vec::new();
                 for classification in &asset.classifications {
                     let label = format!(
                         "{}: {}",
                         classification.dimension_name, classification.value_name
                     );
                     classification_search_terms.push(label);
+                    classification_values.push(SemanticClassificationValue {
+                        dimension_id: classification.dimension_id.clone(),
+                        value_id: classification.value_id.clone(),
+                    });
                     if let Some(alias) = semantic::classification_alias(
                         &classification.dimension_kind,
                         &classification.value_id,
@@ -895,6 +901,7 @@ impl Workspace {
                     relative_path: asset.relative_path,
                     combined_text,
                     classification_search_terms,
+                    classification_values,
                     metadata_text,
                 }
             })

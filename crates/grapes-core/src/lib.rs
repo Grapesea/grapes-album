@@ -11,10 +11,10 @@ pub mod workspace;
 pub use error::{GrapesError, Result};
 pub use types::{
     AssetClassificationView, AssetView, DimensionValueView, DimensionView, FolderView, GraphEdge,
-    GraphInfo, GraphNode, GraphNodeKind, GraphView, ReconcileReport, SemanticAssetRecord,
-    SemanticIndexReport, SemanticIndexSource, SemanticIndexStatus, SemanticMatchReason,
-    SemanticProviderConfig, SemanticSearchResponse, SemanticSearchResult, SmartGraphFilter,
-    WorkspaceSnapshot, WorkspaceView,
+    GraphInfo, GraphNode, GraphNodeKind, GraphView, ReconcileReport, SearchPlan, SearchPlanFilter,
+    SemanticAssetRecord, SemanticClassificationValue, SemanticIndexReport, SemanticIndexSource,
+    SemanticIndexStatus, SemanticMatchReason, SemanticProviderConfig, SemanticSearchResponse,
+    SemanticSearchResult, SmartGraphFilter, WorkspaceSnapshot, WorkspaceView,
 };
 pub use watcher::WorkspaceWatcher;
 pub use workspace::Workspace;

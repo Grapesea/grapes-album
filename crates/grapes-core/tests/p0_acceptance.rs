@@ -4,8 +4,9 @@ use std::path::Path;
 use std::collections::HashMap;
 
 use grapes_core::{
-    semantic::{classification_alias, fuse_search_results},
-    GraphNodeKind, SemanticAssetRecord, SemanticProviderConfig, SmartGraphFilter, Workspace,
+    semantic::{classification_alias, fuse_plan_search_relaxed, fuse_search_results},
+    GraphNodeKind, SearchPlan, SearchPlanFilter, SemanticAssetRecord, SemanticProviderConfig,
+    SmartGraphFilter, Workspace,
 };
 use rusqlite::Connection;
 
@@ -40,13 +41,13 @@ fn initializes_sidecar_and_database_migrations() {
     )
     .expect("manifest json");
     assert_eq!(manifest["schemaVersion"], 1);
-    assert_eq!(snapshot.workspace.schema_version, 9);
+    assert_eq!(snapshot.workspace.schema_version, 10);
 
     let connection = Connection::open(temp.path().join(".grapes/grapes.db")).expect("database");
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let table_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
@@ -88,7 +89,7 @@ fn upgrades_an_existing_v1_database_in_place() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        9
+        10
     );
     let connection = Connection::open(database_path).expect("database");
     let operations_table: i64 = connection
@@ -139,7 +140,7 @@ fn restores_ask_provider_settings_from_an_interim_schema_8_workspace() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        9
+        10
     );
     assert_eq!(
         workspace
@@ -554,11 +555,17 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
         .expect("Ask Grapes settings");
     assert_eq!(ask_grapes.model, "Qwen/Qwen3.5-4B");
     assert_eq!(ask_grapes.provider_type, "siliconflow");
+    assert_eq!(ask_grapes.request_timeout_ms, 90_000);
+    assert_eq!(ask_grapes.max_concurrency, 2);
+    assert_eq!(ask_grapes.max_retries, 2);
     let custom = SemanticProviderConfig {
         enabled: true,
         base_url: "https://example.test/v1".into(),
         model: "custom-vl-embedding".into(),
         api_key: Some("test-secret-key".into()),
+        request_timeout_ms: 60_000,
+        max_concurrency: 4,
+        max_retries: 3,
         ..embedding
     };
     workspace
@@ -573,6 +580,9 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
     assert_eq!(saved.base_url, "https://example.test/v1");
     assert_eq!(saved.model, "custom-vl-embedding");
     assert_eq!(saved.api_key.as_deref(), Some("test-secret-key"));
+    assert_eq!(saved.request_timeout_ms, 60_000);
+    assert_eq!(saved.max_concurrency, 4);
+    assert_eq!(saved.max_retries, 3);
 
     let model_id = workspace
         .ensure_semantic_model(&custom, 3)
@@ -594,6 +604,7 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
             relative_path: "rain.jpg".into(),
             combined_text: "rain.jpg 雨天 冷色调 风光".into(),
             classification_search_terms: vec!["Weather: Rain".into(), "雨".into(), "冷色".into()],
+            classification_values: vec![],
             metadata_text: "rain.jpg".into(),
             thumbnail_path: None,
         },
@@ -603,6 +614,7 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
             relative_path: "sun.jpg".into(),
             combined_text: "sun.jpg".into(),
             classification_search_terms: vec!["Weather: Sunny".into(), "晴".into()],
+            classification_values: vec![],
             metadata_text: "sun.jpg".into(),
             thumbnail_path: None,
         },
@@ -627,6 +639,25 @@ fn semantic_provider_vectors_and_fused_search_persist_by_model() {
         classification_alias("weather", "dimension:weather:rain"),
         Some("雨")
     );
+    let overly_strict_plan = SearchPlan {
+        hard_filters: vec![SearchPlanFilter {
+            dimension_id: "dimension:weather".into(),
+            dimension_name: "Weather".into(),
+            value_ids: vec!["dimension:weather:snow".into()],
+            value_names: vec!["Snow".into()],
+        }],
+        semantic_queries: vec!["雨天冷色调照片".into()],
+        ..SearchPlan::default()
+    };
+    let (relaxed_results, relaxation) = fuse_plan_search_relaxed(
+        &overly_strict_plan,
+        &records,
+        &embeddings,
+        Some(&[1.0, 0.0, 0.0]),
+        10,
+    );
+    assert!(relaxation.is_some());
+    assert!(!relaxed_results.is_empty());
 
     drop(workspace);
     let reopened = Workspace::open(temp.path()).expect("reopen workspace");

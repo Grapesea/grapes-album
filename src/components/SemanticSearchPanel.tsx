@@ -125,10 +125,8 @@ export function SemanticSearchPanel({
       setSettings(saved);
       if (kind === "qa") {
         onAskModelChange(saved.qa.model);
-        setProviderMessage(t("semanticProviderSaved"));
-      } else {
-        setProviderMessage(await testSemanticProvider(kind));
       }
+      setProviderMessage(await testSemanticProvider(kind));
     } catch (caught) {
       onError(normalizeError(caught, "Semantic search failed."));
     } finally {
@@ -326,6 +324,52 @@ export function SemanticSearchPanel({
                       </button>
                     </span>
                   </label>
+                  <details className="semantic-provider-advanced">
+                    <summary>{t("semanticAdvancedSettings")}</summary>
+                    <label>
+                      <span>{t("semanticTimeoutMs")}</span>
+                      <input
+                        type="number"
+                        min="5000"
+                        max="300000"
+                        step="1000"
+                        value={provider.requestTimeoutMs}
+                        onChange={(event) =>
+                          updateProvider(kind, {
+                            requestTimeoutMs: Number(event.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>{t("semanticMaxConcurrency")}</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="8"
+                        value={provider.maxConcurrency}
+                        onChange={(event) =>
+                          updateProvider(kind, {
+                            maxConcurrency: Number(event.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>{t("semanticMaxRetries")}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        value={provider.maxRetries}
+                        onChange={(event) =>
+                          updateProvider(kind, {
+                            maxRetries: Number(event.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                  </details>
                   <button
                     type="button"
                     className="semantic-primary-button"
@@ -388,6 +432,57 @@ export function SemanticSearchPanel({
                 {indexing ? t("semanticIndexing") : t("semanticRebuildIndex")}
               </button>
             </div>
+            {response?.answer && (
+              <section className="semantic-answer">
+                <strong>Ask Grapes</strong>
+                <p>{response.answer}</p>
+              </section>
+            )}
+            {response?.searchPlan && (
+              <details className="semantic-plan">
+                <summary>
+                  {t("semanticSearchPlan")}
+                  <small>
+                    {response.planSource === "qa"
+                      ? t("semanticPlanFromQa")
+                      : t("semanticPlanFallback")}
+                    {response.embeddingUsed
+                      ? ` · ${t("semanticEmbeddingUsed")}`
+                      : ` · ${t("semanticEmbeddingNotUsed")}`}
+                  </small>
+                </summary>
+                <div>
+                  {response.searchPlan.hardFilters.length > 0 && (
+                    <p>
+                      <b>{t("semanticHardFilters")}</b>
+                      {response.searchPlan.hardFilters
+                        .flatMap((filter) =>
+                          filter.valueNames.map(
+                            (value) => `${filter.dimensionName}: ${value}`,
+                          ),
+                        )
+                        .join(" · ")}
+                    </p>
+                  )}
+                  {response.searchPlan.softFilters.length > 0 && (
+                    <p>
+                      <b>{t("semanticSoftFilters")}</b>
+                      {response.searchPlan.softFilters
+                        .flatMap((filter) =>
+                          filter.valueNames.map(
+                            (value) => `${filter.dimensionName}: ${value}`,
+                          ),
+                        )
+                        .join(" · ")}
+                    </p>
+                  )}
+                  <p>
+                    <b>{t("semanticVectorQueries")}</b>
+                    {response.searchPlan.semanticQueries.join(" · ")}
+                  </p>
+                </div>
+              </details>
+            )}
             {notice && <div className="semantic-inline-note">{notice}</div>}
             {!response && (
               <p className="semantic-empty">{t("semanticEnterQueryHint")}</p>

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use base64::Engine;
 use serde_json::{json, Value};
@@ -25,6 +26,14 @@ pub struct SemanticProviderClient {
     http: reqwest::Client,
 }
 
+pub fn provider_jpeg(path: &Path) -> Result<Vec<u8>> {
+    let image = image::open(path)?;
+    let thumbnail = image.thumbnail(384, 384).to_rgb8();
+    let mut output = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 80).encode_image(&thumbnail)?;
+    Ok(output)
+}
+
 impl SemanticProviderClient {
     pub fn new() -> Result<Self> {
         let http = reqwest::Client::builder()
@@ -34,6 +43,42 @@ impl SemanticProviderClient {
         Ok(Self { http })
     }
 
+    async fn send_with_retry<F>(
+        &self,
+        config: &SemanticProviderConfig,
+        mut request: F,
+    ) -> Result<reqwest::Response>
+    where
+        F: FnMut() -> reqwest::RequestBuilder,
+    {
+        let attempts = config.max_retries.min(5) + 1;
+        for attempt in 0..attempts {
+            let result = request()
+                .timeout(std::time::Duration::from_millis(
+                    config.request_timeout_ms.clamp(5_000, 300_000),
+                ))
+                .send()
+                .await;
+            match result {
+                Ok(response)
+                    if !response.status().is_server_error()
+                        && response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
+                {
+                    return Ok(response);
+                }
+                Ok(response) if attempt + 1 == attempts => return Ok(response),
+                Ok(_) => {}
+                Err(error) if attempt + 1 == attempts => return Err(network_error(error)),
+                Err(_) => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(
+                250_u64.saturating_mul(1_u64 << attempt),
+            ))
+            .await;
+        }
+        Err(GrapesError::Network("Provider 请求重试次数耗尽".into()))
+    }
+
     pub async fn embed_text(
         &self,
         config: &SemanticProviderConfig,
@@ -41,17 +86,52 @@ impl SemanticProviderClient {
         text: &str,
     ) -> Result<Vec<f32>> {
         let response = self
-            .http
-            .post(endpoint(&config.base_url, "embeddings"))
-            .bearer_auth(api_key)
-            .json(&json!({
-                "model": config.model,
-                "input": text,
-            }))
-            .send()
-            .await
-            .map_err(network_error)?;
+            .send_with_retry(config, || {
+                self.http
+                    .post(endpoint(&config.base_url, "embeddings"))
+                    .bearer_auth(api_key)
+                    .json(&json!({
+                        "model": config.model,
+                        "input": text,
+                    }))
+            })
+            .await?;
         parse_embedding_response(response).await
+    }
+
+    pub async fn chat(
+        &self,
+        config: &SemanticProviderConfig,
+        api_key: &str,
+        system: &str,
+        user: &str,
+        json_mode: bool,
+    ) -> Result<String> {
+        let request = |json_mode: bool| {
+            let mut body = json!({
+                "model": config.model,
+                "messages": [
+                    { "role": "system", "content": system },
+                    { "role": "user", "content": user },
+                ],
+                "temperature": 0.1,
+                "max_tokens": 1600,
+            });
+            if json_mode {
+                body["response_format"] = json!({ "type": "json_object" });
+            }
+            self.http
+                .post(endpoint(&config.base_url, "chat/completions"))
+                .bearer_auth(api_key)
+                .json(&body)
+        };
+        let response = self.send_with_retry(config, || request(json_mode)).await?;
+        let response = if response.status().is_success() || !json_mode {
+            response
+        } else {
+            self.send_with_retry(config, || request(false)).await?
+        };
+        parse_chat_response(response).await
     }
 
     pub async fn embed_image(
@@ -61,16 +141,16 @@ impl SemanticProviderClient {
         jpeg: &[u8],
     ) -> Result<Vec<f32>> {
         let response = self
-            .http
-            .post(endpoint(&config.base_url, "embeddings"))
-            .bearer_auth(api_key)
-            .json(&json!({
-                "model": config.model,
-                "input": { "image": data_url(jpeg) },
-            }))
-            .send()
-            .await
-            .map_err(network_error)?;
+            .send_with_retry(config, || {
+                self.http
+                    .post(endpoint(&config.base_url, "embeddings"))
+                    .bearer_auth(api_key)
+                    .json(&json!({
+                        "model": config.model,
+                        "input": { "image": data_url(jpeg) },
+                    }))
+            })
+            .await?;
         parse_embedding_response(response).await
     }
 
@@ -91,19 +171,19 @@ impl SemanticProviderClient {
             })
             .collect::<Vec<_>>();
         let multimodal = self
-            .http
-            .post(endpoint(&config.base_url, "rerank"))
-            .bearer_auth(api_key)
-            .json(&json!({
-                "model": config.model,
-                "query": query,
-                "documents": multimodal_documents,
-                "top_n": candidates.len(),
-                "return_documents": false,
-            }))
-            .send()
-            .await
-            .map_err(network_error)?;
+            .send_with_retry(config, || {
+                self.http
+                    .post(endpoint(&config.base_url, "rerank"))
+                    .bearer_auth(api_key)
+                    .json(&json!({
+                        "model": config.model,
+                        "query": query,
+                        "documents": multimodal_documents,
+                        "top_n": candidates.len(),
+                        "return_documents": false,
+                    }))
+            })
+            .await?;
         if multimodal.status().is_success() {
             return parse_rerank_response(multimodal, candidates, "multimodal").await;
         }
@@ -113,19 +193,19 @@ impl SemanticProviderClient {
             .map(|candidate| candidate.text.clone())
             .collect::<Vec<_>>();
         let text_only = self
-            .http
-            .post(endpoint(&config.base_url, "rerank"))
-            .bearer_auth(api_key)
-            .json(&json!({
-                "model": config.model,
-                "query": query,
-                "documents": text_documents,
-                "top_n": candidates.len(),
-                "return_documents": false,
-            }))
-            .send()
-            .await
-            .map_err(network_error)?;
+            .send_with_retry(config, || {
+                self.http
+                    .post(endpoint(&config.base_url, "rerank"))
+                    .bearer_auth(api_key)
+                    .json(&json!({
+                        "model": config.model,
+                        "query": query,
+                        "documents": text_documents,
+                        "top_n": candidates.len(),
+                        "return_documents": false,
+                    }))
+            })
+            .await?;
         parse_rerank_response(text_only, candidates, "text").await
     }
 }
@@ -170,6 +250,33 @@ async fn parse_embedding_response(response: reqwest::Response) -> Result<Vec<f32
         })
         .collect::<Result<Vec<_>>>()?;
     normalize_vector(vector)
+}
+
+async fn parse_chat_response(response: reqwest::Response) -> Result<String> {
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| GrapesError::Network(error.to_string()))?;
+    if !status.is_success() {
+        return Err(provider_error(status.as_u16(), &body));
+    }
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|error| GrapesError::Provider(format!("无法解析问答响应：{error}")))?;
+    value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| {
+            message
+                .get("content")
+                .or_else(|| message.get("reasoning_content"))
+        })
+        .and_then(Value::as_str)
+        .filter(|content| !content.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| GrapesError::Provider("问答响应缺少 message.content".into()))
 }
 
 async fn parse_rerank_response(
@@ -275,6 +382,15 @@ mod tests {
 
     use super::*;
 
+    fn test_client() -> SemanticProviderClient {
+        SemanticProviderClient {
+            http: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test client"),
+        }
+    }
+
     #[test]
     fn normalizes_vectors_and_measures_cosine_similarity() {
         let vector = normalize_vector(vec![3.0, 4.0]).expect("normalized");
@@ -360,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn sends_vl_images_as_jpeg_data_urls() {
-        let client = SemanticProviderClient::new().expect("client");
+        let client = test_client();
         let mut jpeg = Vec::new();
         image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
             .encode(&[255, 0, 0], 1, 1, image::ExtendedColorType::Rgb8)
@@ -374,6 +490,9 @@ mod tests {
                 model: "Qwen/Qwen3-VL-Embedding-8B".into(),
                 enabled: true,
                 api_key: None,
+                request_timeout_ms: 90_000,
+                max_concurrency: 2,
+                max_retries: 2,
             };
             client
                 .embed_image(&config, "secret", &jpeg)
@@ -400,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn keeps_text_embedding_input_as_a_string() {
-        let client = SemanticProviderClient::new().expect("client");
+        let client = test_client();
         let (base_url, request) = mock_captured_response(r#"{"data":[{"embedding":[1,0]}]}"#);
         let config = SemanticProviderConfig {
             kind: "embedding".into(),
@@ -409,6 +528,9 @@ mod tests {
             model: "Qwen/Qwen3-VL-Embedding-8B".into(),
             enabled: true,
             api_key: None,
+            request_timeout_ms: 90_000,
+            max_concurrency: 2,
+            max_retries: 2,
         };
         client
             .embed_text(&config, "secret", "红色的树")
@@ -422,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn parses_embedding_and_rerank_responses() {
-        let client = SemanticProviderClient::new().expect("client");
+        let client = test_client();
         let config = SemanticProviderConfig {
             kind: "embedding".into(),
             provider_type: "custom".into(),
@@ -430,6 +552,9 @@ mod tests {
             model: "mock".into(),
             enabled: true,
             api_key: None,
+            request_timeout_ms: 90_000,
+            max_concurrency: 2,
+            max_retries: 2,
         };
         let vector = client
             .embed_text(&config, "secret", "test")
@@ -457,5 +582,49 @@ mod tests {
             .expect("rerank response");
         assert_eq!(outcome.mode, "multimodal");
         assert!((outcome.scores["asset:1"] - 0.87).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn parses_openai_compatible_chat_json() {
+        let client = test_client();
+        let config = SemanticProviderConfig {
+            kind: "qa".into(),
+            provider_type: "siliconflow".into(),
+            base_url: mock_response(r#"{"choices":[{"message":{"content":"{\"ok\":true}"}}]}"#),
+            model: "Qwen/Qwen3.5-4B".into(),
+            enabled: true,
+            api_key: None,
+            request_timeout_ms: 90_000,
+            max_concurrency: 2,
+            max_retries: 2,
+        };
+        let content = client
+            .chat(
+                &config,
+                "secret",
+                "Return JSON",
+                "Return {\"ok\":true}",
+                true,
+            )
+            .await
+            .expect("chat response");
+        assert_eq!(content, r#"{"ok":true}"#);
+    }
+
+    #[test]
+    fn provider_jpeg_downscales_images_and_encodes_without_metadata() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source.png");
+        image::RgbImage::from_fn(1000, 600, |x, y| {
+            image::Rgb([(x % 255) as u8, (y % 255) as u8, 120])
+        })
+        .save(&source)
+        .expect("source image");
+        let jpeg = provider_jpeg(&source).expect("provider jpeg");
+        let decoded = image::load_from_memory(&jpeg).expect("decoded jpeg");
+        assert!(decoded.width() <= 384);
+        assert!(decoded.height() <= 384);
+        let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&jpeg));
+        assert!(exif.is_err(), "provider JPEG should not contain EXIF");
     }
 }

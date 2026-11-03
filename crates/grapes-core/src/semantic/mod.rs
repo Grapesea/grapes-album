@@ -1,3 +1,4 @@
+mod plan;
 mod provider;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -7,15 +8,22 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::database::now;
 use crate::error::{GrapesError, Result};
 use crate::types::{
-    SemanticAssetRecord, SemanticIndexStatus, SemanticMatchReason, SemanticProviderConfig,
-    SemanticSearchResult,
+    SearchPlan, SemanticAssetRecord, SemanticIndexStatus, SemanticMatchReason,
+    SemanticProviderConfig, SemanticSearchResult,
 };
 
-pub use provider::{cosine_similarity, RerankCandidate, RerankOutcome, SemanticProviderClient};
+pub use plan::{
+    create_search_plan, fallback_search_plan, parse_search_plan, plan_allows_asset,
+    rerank_candidate_text, soft_filter_score,
+};
+pub use provider::{
+    cosine_similarity, provider_jpeg, RerankCandidate, RerankOutcome, SemanticProviderClient,
+};
 
 pub fn load_provider_configs(conn: &Connection) -> Result<Vec<SemanticProviderConfig>> {
     let mut stmt = conn.prepare(
-        "SELECT kind, provider_type, base_url, model, enabled, api_key
+        "SELECT kind, provider_type, base_url, model, enabled, api_key,
+                request_timeout_ms, max_concurrency, max_retries
          FROM semantic_provider_configs
          ORDER BY CASE kind WHEN 'embedding' THEN 0 ELSE 1 END",
     )?;
@@ -27,6 +35,9 @@ pub fn load_provider_configs(conn: &Connection) -> Result<Vec<SemanticProviderCo
             model: row.get(3)?,
             enabled: row.get::<_, i64>(4)? != 0,
             api_key: row.get(5)?,
+            request_timeout_ms: row.get::<_, i64>(6)? as u64,
+            max_concurrency: row.get::<_, i64>(7)? as usize,
+            max_retries: row.get::<_, i64>(8)? as usize,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -55,14 +66,18 @@ pub fn save_provider_config(conn: &Connection, config: &SemanticProviderConfig) 
     }
     conn.execute(
         "INSERT INTO semantic_provider_configs(
-             kind, provider_type, base_url, model, enabled, api_key, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             kind, provider_type, base_url, model, enabled, api_key,
+             request_timeout_ms, max_concurrency, max_retries, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(kind) DO UPDATE SET
              provider_type = excluded.provider_type,
              base_url = excluded.base_url,
              model = excluded.model,
              enabled = excluded.enabled,
              api_key = excluded.api_key,
+             request_timeout_ms = excluded.request_timeout_ms,
+             max_concurrency = excluded.max_concurrency,
+             max_retries = excluded.max_retries,
              updated_at = excluded.updated_at",
         params![
             config.kind,
@@ -75,6 +90,9 @@ pub fn save_provider_config(conn: &Connection, config: &SemanticProviderConfig) 
                 .as_deref()
                 .map(str::trim)
                 .filter(|key| !key.is_empty()),
+            config.request_timeout_ms.clamp(5_000, 300_000) as i64,
+            config.max_concurrency.clamp(1, 8) as i64,
+            config.max_retries.min(5) as i64,
             now()
         ],
     )?;
@@ -83,7 +101,8 @@ pub fn save_provider_config(conn: &Connection, config: &SemanticProviderConfig) 
 
 pub fn load_ask_grapes_provider(conn: &Connection) -> Result<SemanticProviderConfig> {
     conn.query_row(
-        "SELECT provider_type, base_url, model, enabled, api_key
+        "SELECT provider_type, base_url, model, enabled, api_key,
+                request_timeout_ms, max_concurrency, max_retries
          FROM ask_grapes_provider_configs WHERE id = 1",
         [],
         |row| {
@@ -94,6 +113,9 @@ pub fn load_ask_grapes_provider(conn: &Connection) -> Result<SemanticProviderCon
                 model: row.get(2)?,
                 enabled: row.get::<_, i64>(3)? != 0,
                 api_key: row.get(4)?,
+                request_timeout_ms: row.get::<_, i64>(5)? as u64,
+                max_concurrency: row.get::<_, i64>(6)? as usize,
+                max_retries: row.get::<_, i64>(7)? as usize,
             })
         },
     )
@@ -128,7 +150,10 @@ pub fn save_ask_grapes_provider(conn: &Connection, config: &SemanticProviderConf
              model = ?3,
              enabled = ?4,
              api_key = ?5,
-             updated_at = ?6
+             request_timeout_ms = ?6,
+             max_concurrency = ?7,
+             max_retries = ?8,
+             updated_at = ?9
          WHERE id = 1",
         params![
             config.provider_type,
@@ -140,6 +165,9 @@ pub fn save_ask_grapes_provider(conn: &Connection, config: &SemanticProviderConf
                 .as_deref()
                 .map(str::trim)
                 .filter(|key| !key.is_empty()),
+            config.request_timeout_ms.clamp(5_000, 300_000) as i64,
+            config.max_concurrency.clamp(1, 8) as i64,
+            config.max_retries.min(5) as i64,
             now()
         ],
     )?;
@@ -154,6 +182,24 @@ pub fn config_hash(config: &SemanticProviderConfig) -> String {
         config.model.trim()
     );
     blake3::hash(provider_id.as_bytes()).to_hex().to_string()
+}
+
+pub fn average_embeddings(vectors: &[Vec<f32>]) -> Option<Vec<f32>> {
+    let dimension = vectors.first()?.len();
+    if dimension == 0 || vectors.iter().any(|vector| vector.len() != dimension) {
+        return None;
+    }
+    let mut average = vec![0.0_f32; dimension];
+    for vector in vectors {
+        for (target, value) in average.iter_mut().zip(vector) {
+            *target += value;
+        }
+    }
+    let scale = 1.0 / vectors.len() as f32;
+    for value in &mut average {
+        *value *= scale;
+    }
+    provider::normalize_vector(average).ok()
 }
 
 pub fn model_id(config: &SemanticProviderConfig, dimension: usize) -> String {
@@ -298,6 +344,24 @@ pub fn fuse_search_results(
     query_embedding: &[f32],
     candidate_limit: usize,
 ) -> Vec<SemanticSearchResult> {
+    let plan = fallback_search_plan(query);
+    fuse_plan_search(
+        &plan,
+        assets,
+        embeddings,
+        Some(query_embedding),
+        candidate_limit,
+    )
+}
+
+pub fn fuse_plan_search(
+    plan: &SearchPlan,
+    assets: &[SemanticAssetRecord],
+    embeddings: &HashMap<String, Vec<f32>>,
+    query_embedding: Option<&[f32]>,
+    candidate_limit: usize,
+) -> Vec<SemanticSearchResult> {
+    let query = plan.semantic_queries.join(" ");
     let query_lower = query.trim().to_lowercase();
     let tokens = query_lower
         .split(|character: char| {
@@ -308,9 +372,13 @@ pub fn fuse_search_results(
         .collect::<Vec<_>>();
     let mut candidates = Vec::new();
     for asset in assets {
+        if !plan_allows_asset(plan, asset) {
+            continue;
+        }
         let embedding_score = embeddings
             .get(&asset.asset_id)
-            .and_then(|vector| cosine_similarity(query_embedding, vector))
+            .zip(query_embedding)
+            .and_then(|(vector, query)| cosine_similarity(query, vector))
             .map(|score| ((score + 1.0) / 2.0) as f64);
         let classification_matches = asset
             .classification_search_terms
@@ -324,11 +392,49 @@ pub fn fuse_search_results(
             classification_matches.len() as f64 / asset.classification_search_terms.len() as f64
         };
         let metadata_score = text_match_score(&query_lower, &tokens, &asset.metadata_text);
-        let Some(embedding_score) = embedding_score else {
-            if classification_score <= 0.0 && metadata_score <= 0.0 {
+        let soft_score = soft_filter_score(plan, asset);
+        let hard_bonus = if plan.hard_filters.is_empty() {
+            0.0
+        } else {
+            0.35
+        };
+        let mut classification_matches = classification_matches;
+        for filter in &plan.hard_filters {
+            for value_name in &filter.value_names {
+                let label = format!("{}: {value_name}", filter.dimension_name);
+                if !classification_matches.contains(&label) {
+                    classification_matches.push(label);
+                }
+            }
+        }
+        for filter in &plan.soft_filters {
+            let matched = asset.classification_values.iter().any(|value| {
+                value.dimension_id == filter.dimension_id
+                    && filter.value_ids.contains(&value.value_id)
+            });
+            if !matched {
                 continue;
             }
-            let score = 0.55 * classification_score + 0.45 * metadata_score;
+            for value_name in &filter.value_names {
+                let label = format!("{}: {value_name}", filter.dimension_name);
+                if !classification_matches.contains(&label) {
+                    classification_matches.push(label);
+                }
+            }
+        }
+        let Some(embedding_score) = embedding_score else {
+            if classification_score <= 0.0
+                && metadata_score <= 0.0
+                && soft_score <= 0.0
+                && hard_bonus <= 0.0
+            {
+                continue;
+            }
+            let score = (0.25 * classification_score
+                + 0.2 * metadata_score
+                + 0.3 * soft_score
+                + hard_bonus)
+                .min(1.0);
             candidates.push(result(
                 asset,
                 score,
@@ -339,7 +445,12 @@ pub fn fuse_search_results(
             ));
             continue;
         };
-        let score = 0.72 * embedding_score + 0.2 * classification_score + 0.08 * metadata_score;
+        let score = (0.62 * embedding_score
+            + 0.12 * classification_score
+            + 0.06 * metadata_score
+            + 0.15 * soft_score
+            + hard_bonus)
+            .min(1.0);
         candidates.push(result(
             asset,
             score,
@@ -357,6 +468,62 @@ pub fn fuse_search_results(
     });
     candidates.truncate(candidate_limit);
     candidates
+}
+
+pub fn fuse_plan_search_relaxed(
+    plan: &SearchPlan,
+    assets: &[SemanticAssetRecord],
+    embeddings: &HashMap<String, Vec<f32>>,
+    query_embedding: Option<&[f32]>,
+    candidate_limit: usize,
+) -> (Vec<SemanticSearchResult>, Option<&'static str>) {
+    let strict = fuse_plan_search(plan, assets, embeddings, query_embedding, candidate_limit);
+    if !strict.is_empty() {
+        return (strict, None);
+    }
+
+    let mut without_exclusions = plan.clone();
+    without_exclusions.exclusions.clear();
+    let without_exclusions_results = fuse_plan_search(
+        &without_exclusions,
+        assets,
+        embeddings,
+        query_embedding,
+        candidate_limit,
+    );
+    if !without_exclusions_results.is_empty() {
+        return (without_exclusions_results, Some("exclusionsIgnored"));
+    }
+
+    let mut soft_only = without_exclusions;
+    soft_only.hard_filters.clear();
+    let soft_only_results = fuse_plan_search(
+        &soft_only,
+        assets,
+        embeddings,
+        query_embedding,
+        candidate_limit,
+    );
+    if !soft_only_results.is_empty() {
+        return (soft_only_results, Some("hardFiltersRelaxed"));
+    }
+
+    let mut semantic_only = SearchPlan {
+        soft_filters: Vec::new(),
+        ..soft_only
+    };
+    semantic_only.exclusions.clear();
+    semantic_only.hard_filters.clear();
+    (
+        fuse_plan_search(
+            &semantic_only,
+            assets,
+            embeddings,
+            query_embedding,
+            candidate_limit,
+        ),
+        Some("allFiltersRelaxed"),
+    )
 }
 
 fn result(

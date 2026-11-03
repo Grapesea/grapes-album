@@ -21,13 +21,13 @@ import {
   HardDrive,
   LoaderCircle,
   Pencil,
-  RefreshCw,
   Search,
-  Settings,
   ShieldCheck,
   Sparkles,
+  Square,
 } from "lucide-react";
 import {
+  cancelAskGrapes,
   chooseWorkspace,
   createFolder,
   createCustomDimension,
@@ -47,6 +47,7 @@ import {
   setAssetTags,
 } from "./api/workspace";
 import type {
+  AskGrapesProgress,
   AssetView,
   DragPayload,
   Dimension,
@@ -59,7 +60,7 @@ import { FileTree } from "./components/FileTree";
 import { Inspector } from "./components/Inspector";
 import { AssetTags } from "./components/AssetTags";
 import { AssetThumbnail } from "./components/AssetThumbnail";
-import { LanguageSwitcher } from "./components/LanguageSwitcher";
+import { TitleBar } from "./components/TitleBar";
 import { useI18n } from "./i18n";
 import {
   classificationValueDisplayName,
@@ -125,6 +126,14 @@ export default function App() {
   const [semanticResponse, setSemanticResponse] =
     useState<SemanticSearchResponse | null>(null);
   const [semanticSearching, setSemanticSearching] = useState(false);
+  const [askProgress, setAskProgress] = useState<AskGrapesProgress[]>([]);
+  const [askProgressStartedAt, setAskProgressStartedAt] = useState<
+    number | null
+  >(null);
+  const [askProgressClock, setAskProgressClock] = useState(0);
+  const [askDebugOpen, setAskDebugOpen] = useState(true);
+  const activeAskRequest = useRef<string | null>(null);
+  const askCancelRequested = useRef(false);
 
   useEffect(() => {
     setGraphId("graphspaces");
@@ -132,6 +141,11 @@ export default function App() {
     setSemanticPanel(null);
     setSemanticResponse(null);
     setAskQuery("");
+    setAskProgress([]);
+    setAskProgressStartedAt(null);
+    setAskDebugOpen(true);
+    activeAskRequest.current = null;
+    askCancelRequested.current = false;
   }, [snapshot?.workspace.id]);
 
   const workspaceWidth = () =>
@@ -230,6 +244,15 @@ export default function App() {
     };
   }, [snapshot?.workspace.id]);
 
+  useEffect(() => {
+    if (!semanticSearching || askProgressStartedAt == null) return;
+    const update = () =>
+      setAskProgressClock(Date.now() - askProgressStartedAt);
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [askProgressStartedAt, semanticSearching]);
+
   const applySnapshot = useCallback((next: WorkspaceSnapshot) => {
     setSnapshot(next);
     setExpanded((current) => {
@@ -278,6 +301,10 @@ export default function App() {
       }),
       listen<string>("workspace-error", (event) => {
         setError(t("watcherError", { error: event.payload }));
+      }),
+      listen<AskGrapesProgress>("ask-grapes-progress", (event) => {
+        if (event.payload.requestId !== activeAskRequest.current) return;
+        setAskProgress((current) => [...current, event.payload].slice(-10));
       }),
     ]).then((unlisteners) => {
       if (disposed) {
@@ -475,15 +502,76 @@ export default function App() {
   const submitAskSearch = async () => {
     const query = askQuery.trim();
     if (!query || semanticSearching) return;
+    const requestId =
+      globalThis.crypto?.randomUUID?.() ??
+      `ask-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const startedAt = Date.now();
+    activeAskRequest.current = requestId;
+    askCancelRequested.current = false;
+    setAskProgress([]);
+    setAskProgressStartedAt(startedAt);
+    setAskProgressClock(0);
+    setAskDebugOpen(true);
     setSemanticSearching(true);
     setError(null);
     try {
-      setSemanticResponse(await semanticSearch(query, 20));
+      setSemanticResponse(await semanticSearch(query, 20, requestId));
       setSemanticPanel("results");
     } catch (caught) {
-      setError(normalizeError(caught, t("operationFailed")));
+      const message = normalizeError(caught, t("operationFailed"));
+      if (askCancelRequested.current) {
+        setAskProgress((current) => [
+          ...current,
+          {
+            requestId,
+            stage: "cancelled",
+            state: "warning",
+            message: t("askCancelled"),
+            detail: null,
+            elapsedMs: Date.now() - startedAt,
+          },
+        ]);
+        return;
+      }
+      setAskProgress((current) => [
+        ...current,
+        {
+          requestId,
+          stage: "error",
+          state: "error",
+          message: t("askRequestFailed"),
+          detail: message,
+          elapsedMs: Date.now() - startedAt,
+        },
+      ]);
+      setError(message);
     } finally {
       setSemanticSearching(false);
+    }
+  };
+
+  const stopAskSearch = async () => {
+    const requestId = activeAskRequest.current;
+    if (!requestId || !semanticSearching) return;
+    askCancelRequested.current = true;
+    setAskProgress((current) => [
+      ...current,
+      {
+        requestId,
+        stage: "cancelled",
+        state: "warning",
+        message: t("askStopping"),
+        detail: null,
+        elapsedMs: askProgressClock,
+      },
+    ]);
+    try {
+      const cancelled = await cancelAskGrapes(requestId);
+      if (!cancelled) {
+        setError(t("askStopFailed"));
+      }
+    } catch (caught) {
+      setError(normalizeError(caught, t("askStopFailed")));
     }
   };
 
@@ -536,13 +624,29 @@ export default function App() {
     return updated;
   };
 
+  const handleWindowError = useCallback((error: unknown) => {
+    setError(normalizeError(error, t("operationFailed")));
+  }, [t]);
+
+  const titlebar = (
+    <TitleBar
+      workspaceOpen={snapshot !== null}
+      busy={busy !== null}
+      refreshing={busy === t("rescanBusy")}
+      onSettings={() => setSemanticPanel("settings")}
+      onRefresh={() => { void run(t("rescanBusy"), () => reconcileWorkspace()); }}
+      onError={handleWindowError}
+    />
+  );
+
   if (!snapshot) {
     return (
-      <div className="welcome-shell">
+      <div className="app-frame">
+        {titlebar}
+        <div className="welcome-shell">
         <div className="welcome-orb orb-one" />
         <div className="welcome-orb orb-two" />
         <main className="welcome-card">
-          <LanguageSwitcher className="welcome-language-switch" />
           <div className="brand-lockup large welcome-brand">
             <BrandMark />
             <div>
@@ -577,42 +681,15 @@ export default function App() {
             </div>
           )}
         </main>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <label className="search-box">
-          <Search size={16} />
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-          />
-        </label>
-        <LanguageSwitcher />
-        <button
-          type="button"
-          className="icon-button"
-          title={t("rescanTitle")}
-          disabled={busy !== null}
-          onClick={() => run(t("rescanBusy"), () => reconcileWorkspace())}
-        >
-          <RefreshCw
-            size={17}
-            className={busy === t("rescanBusy") ? "spin" : ""}
-          />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          title={t("semanticProviderSettings")}
-          onClick={() => setSemanticPanel("settings")}
-        >
-          <Settings size={17} />
-        </button>
-      </header>
+    <div className="app-frame">
+      {titlebar}
+      <div className="app-shell">
 
       <div
         className="workspace-grid"
@@ -640,6 +717,14 @@ export default function App() {
               <FolderPlus size={16} />
             </button>
           </div>
+          <label className="search-box sidebar-search-box">
+            <Search size={14} />
+            <input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder={t("filterPlaceholder")}
+            />
+          </label>
           <button
             type="button"
             className={`graphspaces-entry ${graphOpen ? "active" : ""}`}
@@ -691,6 +776,62 @@ export default function App() {
                 <span className="status-dot" />
                 <span className="provider-model">{askGrapesModel}</span>
               </span>
+              {(semanticSearching || askProgress.length > 0) && (
+                <span
+                  className={`ask-debug-panel ${
+                    askDebugOpen ? "open" : "collapsed"
+                  }`}
+                  aria-live="polite"
+                >
+                  <span className="ask-debug-heading">
+                    <button
+                      type="button"
+                      className="ask-debug-toggle"
+                      title={
+                        askDebugOpen
+                          ? t("askDebugCollapse")
+                          : t("askDebugExpand")
+                      }
+                      aria-label={
+                        askDebugOpen
+                          ? t("askDebugCollapse")
+                          : t("askDebugExpand")
+                      }
+                      aria-expanded={askDebugOpen}
+                      onClick={() => setAskDebugOpen((open) => !open)}
+                    >
+                      <ChevronRight size={11} />
+                    </button>
+                    <strong>{t("askDebugTitle")}</strong>
+                    <time>
+                      {(
+                        (semanticSearching
+                          ? askProgressClock
+                          : askProgress.at(-1)?.elapsedMs ?? 0) / 1000
+                      ).toFixed(1)}
+                      s
+                    </time>
+                  </span>
+                  {askDebugOpen && (
+                    <span className="ask-debug-list">
+                      {askProgress.slice(-6).map((progress, index) => (
+                        <span
+                          className={`ask-debug-item ${progress.state}`}
+                          key={`${progress.requestId}:${progress.stage}:${index}`}
+                        >
+                          <b>{progress.stage.toUpperCase()}</b>
+                          <span>
+                            <span>{progress.message}</span>
+                            {progress.detail && (
+                              <small>{progress.detail}</small>
+                            )}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </span>
+              )}
               <span className="ask-input">
                 <input
                   value={askQuery}
@@ -711,6 +852,17 @@ export default function App() {
                     <Search size={13} />
                   )}
                 </button>
+                {semanticSearching && (
+                  <button
+                    type="button"
+                    className="ask-stop-button"
+                    title={t("askStop")}
+                    aria-label={t("askStop")}
+                    onClick={() => void stopAskSearch()}
+                  >
+                    <Square size={10} fill="currentColor" />
+                  </button>
+                )}
               </span>
             </form>
           </div>
@@ -1020,6 +1172,7 @@ export default function App() {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

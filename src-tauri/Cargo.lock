@@ -1397,8 +1397,10 @@ dependencies = [
 name = "grapes"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "grapes-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1412,6 +1414,7 @@ dependencies = [
  "blake3",
  "chrono",
  "file-id",
+ "futures-util",
  "image",
  "kamadak-exif",
  "notify",
@@ -1421,6 +1424,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
 ]
 

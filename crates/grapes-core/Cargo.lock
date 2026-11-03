@@ -525,6 +525,7 @@ dependencies = [
  "blake3",
  "chrono",
  "file-id",
+ "futures-util",
  "image",
  "kamadak-exif",
  "notify",

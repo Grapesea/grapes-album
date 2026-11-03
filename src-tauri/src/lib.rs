@@ -1,9 +1,20 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use futures_util::{
+    future::{select, Either},
+    stream,
+    task::AtomicWaker,
+    StreamExt,
+};
 use grapes_core::{
-    semantic::{fuse_search_results, RerankCandidate, SemanticProviderClient},
-    DimensionView, GraphInfo, GraphView, SemanticIndexReport, SemanticIndexStatus,
+    semantic::{
+        average_embeddings, create_search_plan, fallback_search_plan, fuse_plan_search_relaxed,
+        provider_jpeg, rerank_candidate_text, RerankCandidate, SemanticProviderClient,
+    },
+    DimensionView, GraphInfo, GraphView, SearchPlan, SemanticIndexReport, SemanticIndexStatus,
     SemanticProviderConfig, SemanticSearchResponse, SmartGraphFilter, Workspace, WorkspaceSnapshot,
     WorkspaceWatcher,
 };
@@ -16,8 +27,38 @@ struct Session {
 }
 
 #[derive(Default)]
+struct AskCancellation {
+    cancelled: AtomicBool,
+    waker: AtomicWaker,
+}
+
+impl AskCancellation {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.waker.wake();
+    }
+
+    async fn cancelled(self: Arc<Self>) {
+        std::future::poll_fn(move |context| {
+            if self.cancelled.load(Ordering::Acquire) {
+                std::task::Poll::Ready(())
+            } else {
+                self.waker.register(context.waker());
+                if self.cancelled.load(Ordering::Acquire) {
+                    std::task::Poll::Ready(())
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
+        })
+        .await;
+    }
+}
+
+#[derive(Default)]
 struct AppState {
     session: Mutex<Option<Session>>,
+    ask_cancellations: Mutex<HashMap<String, Arc<AskCancellation>>>,
 }
 
 #[derive(Serialize)]
@@ -34,6 +75,39 @@ struct SemanticSettingsView {
 struct SemanticIndexResult {
     report: SemanticIndexReport,
     status: SemanticIndexStatus,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AskGrapesProgress {
+    request_id: String,
+    stage: String,
+    state: String,
+    message: String,
+    detail: Option<String>,
+    elapsed_ms: u64,
+}
+
+fn emit_ask_progress(
+    app: &AppHandle,
+    request_id: &str,
+    started: Instant,
+    stage: &str,
+    state: &str,
+    message: impl Into<String>,
+    detail: Option<String>,
+) {
+    let _ = app.emit(
+        "ask-grapes-progress",
+        AskGrapesProgress {
+            request_id: request_id.to_owned(),
+            stage: stage.to_owned(),
+            state: state.to_owned(),
+            message: message.into(),
+            detail,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        },
+    );
 }
 
 #[tauri::command]
@@ -375,14 +449,22 @@ async fn test_semantic_provider(
     kind: String,
 ) -> std::result::Result<String, String> {
     let workspace = active_workspace(&state)?;
-    let config = workspace
-        .lock()
-        .map_err(|_| "工作区锁已损坏".to_owned())?
-        .semantic_provider_configs()
-        .map_err(error_string)?
-        .into_iter()
-        .find(|config| config.kind == kind)
-        .ok_or_else(|| format!("Provider {kind} 不存在"))?;
+    let config = if kind == "qa" {
+        workspace
+            .lock()
+            .map_err(|_| "工作区锁已损坏".to_owned())?
+            .ask_grapes_provider_config()
+            .map_err(error_string)?
+    } else {
+        workspace
+            .lock()
+            .map_err(|_| "工作区锁已损坏".to_owned())?
+            .semantic_provider_configs()
+            .map_err(error_string)?
+            .into_iter()
+            .find(|config| config.kind == kind)
+            .ok_or_else(|| format!("Provider {kind} 不存在"))?
+    };
     if !config.enabled {
         return Ok("Provider 已关闭".into());
     }
@@ -392,12 +474,42 @@ async fn test_semantic_provider(
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "请先填写 API Key".to_owned())?;
     let client = SemanticProviderClient::new().map_err(error_string)?;
-    if kind == "embedding" {
+    if kind == "qa" {
+        let content = client
+            .chat(
+                &config,
+                &api_key,
+                "You are a capability probe. Reply with one JSON object only.",
+                r#"Return {"ok":true}"#,
+                true,
+            )
+            .await
+            .map_err(error_string)?;
+        let value: serde_json::Value = serde_json::from_str(
+            content
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim(),
+        )
+        .map_err(|error| format!("模型未返回合法 JSON：{error}"))?;
+        if value.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err("模型未返回预期 JSON 能力标记".into());
+        }
+        Ok("连接成功：文本 ✓ / 结构化 JSON ✓".into())
+    } else if kind == "embedding" {
         let vector = client
             .embed_text(&config, &api_key, "Grapes semantic search connection test")
             .await
             .map_err(error_string)?;
-        Ok(format!("连接成功，向量维度 {}", vector.len()))
+        let multimodal = config.model.to_ascii_lowercase().contains("vl");
+        Ok(format!(
+            "连接成功：文本维度 {} / 图片 {} / 共享多模态空间 {}",
+            vector.len(),
+            if multimodal { "✓" } else { "未声明" },
+            if multimodal { "✓" } else { "未声明" }
+        ))
     } else {
         let result = client
             .rerank(
@@ -463,18 +575,24 @@ async fn rebuild_semantic_index(
         .zip(status.dimension)
         .map(|(id, dimension)| (id, dimension));
     let mut last_error = None;
-    for source in sources {
-        let bytes = match std::fs::read(&source.thumbnail_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                report.failed += 1;
-                report
-                    .warnings
-                    .push(format!("{}: {error}", source.thumbnail_path.display()));
-                continue;
+    let indexed = stream::iter(sources)
+        .map(|source| {
+            let client = &client;
+            let config = &config;
+            let api_key = &api_key;
+            async move {
+                let result = match provider_jpeg(&source.thumbnail_path) {
+                    Ok(bytes) => client.embed_image(config, api_key, &bytes).await,
+                    Err(error) => Err(error),
+                };
+                (source, result)
             }
-        };
-        match client.embed_image(&config, &api_key, &bytes).await {
+        })
+        .buffer_unordered(config.max_concurrency.clamp(1, 8))
+        .collect::<Vec<_>>()
+        .await;
+    for (source, result) in indexed {
+        match result {
             Ok(vector) => {
                 let dimension = vector.len();
                 if let Some((_, existing_dimension)) = &model {
@@ -525,15 +643,90 @@ async fn rebuild_semantic_index(
 
 #[tauri::command]
 async fn semantic_search(
+    app: AppHandle,
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
+    request_id: String,
+) -> std::result::Result<SemanticSearchResponse, String> {
+    let started = Instant::now();
+    let cancellation = Arc::new(AskCancellation::default());
+    state
+        .ask_cancellations
+        .lock()
+        .map_err(|_| "Ask Grapes 请求状态锁已损坏".to_owned())?
+        .insert(request_id.clone(), cancellation.clone());
+    let search = Box::pin(run_semantic_search(
+        &app,
+        state.inner(),
+        query,
+        limit,
+        request_id.clone(),
+        started,
+    ));
+    let cancelled = Box::pin(cancellation.cancelled());
+    let result = match select(search, cancelled).await {
+        Either::Left((result, _)) => result,
+        Either::Right(((), _)) => {
+            emit_ask_progress(
+                &app,
+                &request_id,
+                started,
+                "cancelled",
+                "warning",
+                "Ask Grapes 请求已由用户停止",
+                Some("当前网络请求已取消".into()),
+            );
+            Err("Ask Grapes 请求已取消".into())
+        }
+    };
+    if let Ok(mut jobs) = state.ask_cancellations.lock() {
+        jobs.remove(&request_id);
+    }
+    result
+}
+
+#[tauri::command]
+fn cancel_ask_grapes(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> std::result::Result<bool, String> {
+    let cancellation = state
+        .ask_cancellations
+        .lock()
+        .map_err(|_| "Ask Grapes 请求状态锁已损坏".to_owned())?
+        .get(&request_id)
+        .cloned();
+    if let Some(cancellation) = cancellation {
+        cancellation.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+async fn run_semantic_search(
+    app: &AppHandle,
+    state: &AppState,
+    query: String,
+    limit: Option<usize>,
+    request_id: String,
+    started: Instant,
 ) -> std::result::Result<SemanticSearchResponse, String> {
     let query = query.trim().to_owned();
     if query.is_empty() {
         return Err("请输入要查找的照片描述".into());
     }
-    let workspace = active_workspace(&state)?;
+    emit_ask_progress(
+        app,
+        &request_id,
+        started,
+        "query",
+        "started",
+        "已收到查询，正在读取 Provider 配置",
+        Some(query.clone()),
+    );
+    let workspace = active_workspace_from(state)?;
     let configs = workspace
         .lock()
         .map_err(|_| "工作区锁已损坏".to_owned())?
@@ -548,40 +741,228 @@ async fn semantic_search(
         .iter()
         .find(|config| config.kind == "rerank")
         .cloned();
-    if !embedding_config.enabled {
-        return Err("Embedding Provider 已关闭".into());
-    }
+    let qa_config = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .ask_grapes_provider_config()
+        .map_err(error_string)?;
+    let dimensions = workspace
+        .lock()
+        .map_err(|_| "工作区锁已损坏".to_owned())?
+        .classification_schema()
+        .map_err(error_string)?;
     let embedding_key = embedding_config.api_key.clone();
     let rerank_key = rerank_config
         .as_ref()
         .and_then(|config| config.api_key.clone());
-    let embedding_key = embedding_key.ok_or_else(|| "请先填写 Embedding API Key".to_owned())?;
     let client = SemanticProviderClient::new().map_err(error_string)?;
-    let query_vector = client
-        .embed_text(&embedding_config, &embedding_key, &query)
-        .await
-        .map_err(error_string)?;
+    let mut warnings = Vec::new();
+    let (search_plan, plan_source) = if qa_config.enabled {
+        if let Some(qa_key) = qa_config
+            .api_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            emit_ask_progress(
+                app,
+                &request_id,
+                started,
+                "planning",
+                "waiting",
+                "已发送 Ask Grapes 查询规划请求，等待模型响应",
+                Some(format!(
+                    "{} · {} · timeout {}ms · retries {}",
+                    qa_config.base_url,
+                    qa_config.model,
+                    qa_config.request_timeout_ms,
+                    qa_config.max_retries
+                )),
+            );
+            match create_search_plan(&client, &qa_config, qa_key, &query, &dimensions).await {
+                Ok(plan) => {
+                    emit_ask_progress(
+                        app,
+                        &request_id,
+                        started,
+                        "planning",
+                        "success",
+                        "Search Plan 已生成并通过校验",
+                        Some(format!(
+                            "hard {} · soft {} · semantic {}",
+                            plan.hard_filters.len(),
+                            plan.soft_filters.len(),
+                            plan.semantic_queries.len()
+                        )),
+                    );
+                    (plan, "qa".to_owned())
+                }
+                Err(error) => {
+                    emit_ask_progress(
+                        app,
+                        &request_id,
+                        started,
+                        "planning",
+                        "warning",
+                        "查询规划失败，改用原始查询继续检索",
+                        Some(error.to_string()),
+                    );
+                    warnings.push(format!("Ask Grapes 查询规划失败，已使用原始查询：{error}"));
+                    (fallback_search_plan(&query), "fallback".to_owned())
+                }
+            }
+        } else {
+            emit_ask_progress(
+                app,
+                &request_id,
+                started,
+                "planning",
+                "warning",
+                "Ask Grapes 未配置 API Key，跳过模型规划",
+                None,
+            );
+            warnings.push("Ask Grapes 未配置 API Key，已使用原始查询".into());
+            (fallback_search_plan(&query), "fallback".to_owned())
+        }
+    } else {
+        emit_ask_progress(
+            app,
+            &request_id,
+            started,
+            "planning",
+            "warning",
+            "Ask Grapes QA 已关闭，使用原始查询",
+            None,
+        );
+        warnings.push("Ask Grapes QA 已关闭，已使用原始查询".into());
+        (fallback_search_plan(&query), "fallback".to_owned())
+    };
+    let mut query_vectors = Vec::new();
+    if embedding_config.enabled {
+        if let Some(embedding_key) = embedding_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            emit_ask_progress(
+                app,
+                &request_id,
+                started,
+                "embedding",
+                "waiting",
+                "正在生成文本查询向量",
+                Some(format!(
+                    "{} · {} · {} queries",
+                    embedding_config.base_url,
+                    embedding_config.model,
+                    search_plan.semantic_queries.iter().take(4).count()
+                )),
+            );
+            for semantic_query in search_plan.semantic_queries.iter().take(4) {
+                match client
+                    .embed_text(&embedding_config, embedding_key, semantic_query)
+                    .await
+                {
+                    Ok(vector) => query_vectors.push(vector),
+                    Err(error) => {
+                        warnings.push(format!("语义查询“{semantic_query}”生成向量失败：{error}"))
+                    }
+                }
+            }
+            emit_ask_progress(
+                app,
+                &request_id,
+                started,
+                "embedding",
+                if query_vectors.is_empty() {
+                    "warning"
+                } else {
+                    "success"
+                },
+                if query_vectors.is_empty() {
+                    "文本向量生成失败，将使用分类与 EXIF 检索"
+                } else {
+                    "文本查询向量已生成"
+                },
+                Some(format!("vectors {}", query_vectors.len())),
+            );
+        } else {
+            warnings.push("Embedding 未配置 API Key，本次仅使用分类与 EXIF 检索".into());
+        }
+    } else {
+        warnings.push("Embedding 已关闭，本次仅使用分类与 EXIF 检索".into());
+    }
+    let query_vector = average_embeddings(&query_vectors);
+    let embedding_used = query_vector.is_some();
+    emit_ask_progress(
+        app,
+        &request_id,
+        started,
+        "retrieval",
+        "waiting",
+        "正在融合分类、EXIF 与语义向量",
+        Some(format!(
+            "embedding {}",
+            if embedding_used {
+                "enabled"
+            } else {
+                "unavailable"
+            }
+        )),
+    );
 
     let (assets, embeddings, status) = {
         let workspace = workspace.lock().map_err(|_| "工作区锁已损坏".to_owned())?;
-        let model_id = workspace
-            .ensure_semantic_model(&embedding_config, query_vector.len())
-            .map_err(error_string)?;
         let assets = workspace.semantic_assets().map_err(error_string)?;
-        let embeddings = workspace
-            .semantic_embeddings(&model_id)
-            .map_err(error_string)?;
+        let embeddings = if let Some(query_vector) = query_vector.as_deref() {
+            let model_id = workspace
+                .ensure_semantic_model(&embedding_config, query_vector.len())
+                .map_err(error_string)?;
+            workspace
+                .semantic_embeddings(&model_id)
+                .map_err(error_string)?
+        } else {
+            HashMap::new()
+        };
         let status = workspace
             .semantic_index_status(&embedding_config)
             .map_err(error_string)?;
         (assets, embeddings, status)
     };
     let candidate_limit = limit.unwrap_or(20).max(1).min(100) * 2;
-    let mut results =
-        fuse_search_results(&query, &assets, &embeddings, &query_vector, candidate_limit);
+    let (mut results, relaxed) = fuse_plan_search_relaxed(
+        &search_plan,
+        &assets,
+        &embeddings,
+        query_vector.as_deref(),
+        candidate_limit,
+    );
+    if let Some(relaxed) = relaxed {
+        let message = match relaxed {
+            "exclusionsIgnored" => "严格排除条件没有产生结果，已忽略排除项",
+            "hardFiltersRelaxed" => "严格分类条件没有产生结果，已将必须条件降级为优先条件",
+            _ => "所有严格过滤条件没有产生结果，已仅使用语义与元数据召回",
+        };
+        warnings.push(message.into());
+        emit_ask_progress(
+            app,
+            &request_id,
+            started,
+            "retrieval",
+            "warning",
+            message,
+            None,
+        );
+    }
     let candidate_count = results.len();
-    let mut warnings = Vec::new();
-    if status.pending_assets > 0 {
+    emit_ask_progress(
+        app,
+        &request_id,
+        started,
+        "retrieval",
+        "success",
+        format!("候选照片检索完成：{candidate_count} 张"),
+        None,
+    );
+    if embedding_used && status.pending_assets > 0 {
         warnings.push(format!(
             "{} 张照片尚未生成语义向量，当前结果只使用已索引照片",
             status.pending_assets
@@ -599,23 +980,55 @@ async fn semantic_search(
                     .iter()
                     .filter_map(|result| {
                         let asset = by_id.get(result.asset_id.as_str())?;
-                        Some(RerankCandidate {
+                        let candidate = RerankCandidate {
                             asset_id: result.asset_id.clone(),
                             text: asset.combined_text.clone(),
                             image_jpeg: asset
                                 .thumbnail_path
                                 .as_deref()
-                                .and_then(|path| std::fs::read(path).ok()),
+                                .and_then(|path| provider_jpeg(path).ok()),
+                        };
+                        Some(RerankCandidate {
+                            text: rerank_candidate_text(&search_plan, &candidate),
+                            ..candidate
                         })
                     })
                     .collect::<Vec<_>>();
                 if !rerank_candidates.is_empty() {
+                    emit_ask_progress(
+                        app,
+                        &request_id,
+                        started,
+                        "rerank",
+                        "waiting",
+                        "正在重排序候选照片",
+                        Some(format!(
+                            "{} · {} · {} candidates",
+                            rerank_config.base_url,
+                            rerank_config.model,
+                            rerank_candidates.len()
+                        )),
+                    );
                     match client
-                        .rerank(&rerank_config, &rerank_key, &query, &rerank_candidates)
+                        .rerank(
+                            &rerank_config,
+                            &rerank_key,
+                            search_plan.rerank_instruction.as_deref().unwrap_or(&query),
+                            &rerank_candidates,
+                        )
                         .await
                     {
                         Ok(outcome) => {
                             reranked = true;
+                            emit_ask_progress(
+                                app,
+                                &request_id,
+                                started,
+                                "rerank",
+                                "success",
+                                "候选照片重排序完成",
+                                Some(format!("mode {}", outcome.mode)),
+                            );
                             if outcome.mode == "text" {
                                 warnings.push(
                                     "Rerank 多模态请求被拒绝，已降级为文本与元数据重排序".into(),
@@ -634,17 +1047,63 @@ async fn semantic_search(
                             results.sort_by(|left, right| right.score.total_cmp(&left.score));
                         }
                         Err(error) => {
+                            emit_ask_progress(
+                                app,
+                                &request_id,
+                                started,
+                                "rerank",
+                                "warning",
+                                "Rerank 失败，已返回融合检索结果",
+                                Some(error.to_string()),
+                            );
                             warnings.push(format!("Rerank 失败，已返回向量结果：{error}"))
                         }
                     }
                 }
             } else {
+                emit_ask_progress(
+                    app,
+                    &request_id,
+                    started,
+                    "rerank",
+                    "warning",
+                    "未配置 Rerank API Key，跳过重排序",
+                    None,
+                );
                 warnings.push("未配置 Rerank API Key，已关闭重排序".into());
             }
         }
     }
     results.truncate(limit.unwrap_or(20).max(1).min(100));
+    emit_ask_progress(
+        app,
+        &request_id,
+        started,
+        "answer",
+        "success",
+        "检索结果已生成，正在生成本地摘要",
+        None,
+    );
+    let answer = Some(local_search_answer(&search_plan, &results));
+    emit_ask_progress(
+        app,
+        &request_id,
+        started,
+        "complete",
+        "success",
+        "Ask Grapes 检索完成",
+        Some(format!(
+            "{} results · {:.1}s",
+            results.len(),
+            started.elapsed().as_secs_f64()
+        )),
+    );
     Ok(SemanticSearchResponse {
+        query,
+        answer,
+        search_plan: Some(search_plan),
+        plan_source,
+        embedding_used,
         candidate_count,
         reranked,
         results,
@@ -652,9 +1111,43 @@ async fn semantic_search(
     })
 }
 
+fn local_search_answer(plan: &SearchPlan, results: &[grapes_core::SemanticSearchResult]) -> String {
+    let filters = plan
+        .hard_filters
+        .iter()
+        .flat_map(|filter| {
+            filter
+                .value_names
+                .iter()
+                .map(move |value| format!("{} · {value}", filter.dimension_name))
+        })
+        .collect::<Vec<_>>();
+    let names = results
+        .iter()
+        .take(3)
+        .map(|result| result.filename.as_str())
+        .collect::<Vec<_>>()
+        .join("、");
+    if results.is_empty() {
+        "没有找到符合当前条件的照片。".into()
+    } else if filters.is_empty() {
+        format!("找到 {} 张相关照片：{names}", results.len())
+    } else {
+        format!(
+            "找到 {} 张相关照片：{names}。主要条件：{}",
+            results.len(),
+            filters.join("；")
+        )
+    }
+}
+
 fn active_workspace(
     state: &State<'_, AppState>,
 ) -> std::result::Result<Arc<Mutex<Workspace>>, String> {
+    active_workspace_from(state.inner())
+}
+
+fn active_workspace_from(state: &AppState) -> std::result::Result<Arc<Mutex<Workspace>>, String> {
     state
         .session
         .lock()
@@ -818,7 +1311,8 @@ pub fn run() {
             save_semantic_provider,
             test_semantic_provider,
             rebuild_semantic_index,
-            semantic_search
+            semantic_search,
+            cancel_ask_grapes
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grapes");

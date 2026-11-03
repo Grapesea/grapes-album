@@ -8,6 +8,8 @@ pub enum GrapesError {
     Database(#[from] rusqlite::Error),
     #[error("文件监听错误：{0}")]
     Watcher(#[from] notify::Error),
+    #[error("图片处理错误：{0}")]
+    Image(#[from] image::ImageError),
     #[error("工作区清单错误：{0}")]
     Manifest(#[from] serde_json::Error),
     #[error("无效的工作区：{0}")]

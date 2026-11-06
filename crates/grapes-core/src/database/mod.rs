@@ -4,10 +4,11 @@ use std::path::Path;
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
+use crate::classification::DerivedClassification;
 use crate::error::{GrapesError, Result};
 use crate::types::{AssetClassificationView, DimensionValueView, DimensionView};
 
-pub const DATABASE_SCHEMA_VERSION: i64 = 10;
+pub const DATABASE_SCHEMA_VERSION: i64 = 11;
 
 #[derive(Debug, Clone)]
 pub struct FolderRow {
@@ -272,13 +273,18 @@ impl Database {
         if selected {
             self.conn.execute(
                 "INSERT INTO classifications(
-                     asset_id, dimension_value_id, source, confidence, status, created_at
-                 ) VALUES (?1, ?2, 'manual', 1.0, 'accepted', ?3)
+                     asset_id, dimension_value_id, source, confidence, status,
+                     created_at, method, model_id, prompt_version, evidence
+                 ) VALUES (?1, ?2, 'manual', 1.0, 'accepted', ?3, 'manual', NULL, NULL, NULL)
                  ON CONFLICT(asset_id, dimension_value_id) DO UPDATE SET
                      source = 'manual',
                      confidence = 1.0,
                      status = 'accepted',
-                     created_at = excluded.created_at",
+                     created_at = excluded.created_at,
+                     method = 'manual',
+                     model_id = NULL,
+                     prompt_version = NULL,
+                     evidence = NULL",
                 params![asset_id, value_id, now()],
             )?;
         } else {
@@ -289,6 +295,75 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    /// Replace the deterministic classifications of one dimension for an asset.
+    ///
+    /// Deterministic rows are namespaced by `source = 'derived'`, so they can
+    /// be recomputed without touching manual or model rows. When the asset
+    /// already has any non-derived value in that dimension, the user's choice
+    /// wins: stale derived rows are removed and nothing is inserted.
+    pub fn replace_derived_classifications(
+        &self,
+        asset_id: &str,
+        dimension_id: &str,
+        suggestions: &[DerivedClassification],
+    ) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM classifications
+             WHERE asset_id = ?1
+               AND source = 'derived'
+               AND dimension_value_id IN (
+                   SELECT id FROM dimension_values WHERE dimension_id = ?2
+               )",
+            params![asset_id, dimension_id],
+        )?;
+        let asserted: i64 = tx.query_row(
+            "SELECT COUNT(*)
+             FROM classifications c
+             JOIN dimension_values v ON v.id = c.dimension_value_id
+             WHERE c.asset_id = ?1
+               AND v.dimension_id = ?2
+               AND c.source <> 'derived'",
+            params![asset_id, dimension_id],
+            |row| row.get(0),
+        )?;
+        if asserted > 0 {
+            tx.commit()?;
+            return Ok(0);
+        }
+
+        let created_at = now();
+        let mut inserted = 0;
+        for suggestion in suggestions {
+            let value_exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM dimension_values WHERE id = ?1",
+                [suggestion.value_id],
+                |row| row.get(0),
+            )?;
+            if value_exists == 0 {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO classifications(
+                     asset_id, dimension_value_id, source, confidence, status,
+                     created_at, method, model_id, prompt_version, evidence
+                 ) VALUES (?1, ?2, 'derived', ?3, 'accepted', ?4, ?5, NULL, ?6, ?7)",
+                params![
+                    asset_id,
+                    suggestion.value_id,
+                    suggestion.confidence,
+                    created_at,
+                    suggestion.method,
+                    suggestion.prompt_version,
+                    suggestion.evidence
+                ],
+            )?;
+            inserted += 1;
+        }
+        tx.commit()?;
+        Ok(inserted)
     }
 
     pub fn create_custom_dimension(&self, name: &str) -> Result<DimensionView> {
@@ -309,6 +384,8 @@ impl Database {
             kind: "custom".into(),
             sort_order,
             system_defined: false,
+            cardinality: "multi".into(),
+            origin: "manual".into(),
             values: Vec::new(),
         })
     }
@@ -393,6 +470,10 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             include_str!("migrations/009_restore_ask_grapes_provider.sql"),
         ),
         (10, include_str!("migrations/010_provider_runtime.sql")),
+        (
+            11,
+            include_str!("migrations/011_classification_provenance.sql"),
+        ),
     ];
 
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -463,7 +544,7 @@ pub(crate) fn load_asset_tags(conn: &Connection) -> Result<BTreeMap<String, Vec<
 
 pub(crate) fn load_dimensions(conn: &Connection) -> Result<Vec<DimensionView>> {
     let mut dimensions_stmt = conn.prepare(
-        "SELECT id, name, kind, sort_order, system_defined
+        "SELECT id, name, kind, sort_order, system_defined, cardinality, origin
          FROM dimensions ORDER BY sort_order, name COLLATE NOCASE",
     )?;
     let mut dimensions = dimensions_stmt
@@ -474,6 +555,8 @@ pub(crate) fn load_dimensions(conn: &Connection) -> Result<Vec<DimensionView>> {
                 kind: row.get(2)?,
                 sort_order: row.get(3)?,
                 system_defined: row.get::<_, i64>(4)? != 0,
+                cardinality: row.get(5)?,
+                origin: row.get(6)?,
                 values: Vec::new(),
             })
         })?
@@ -514,7 +597,7 @@ pub(crate) fn load_asset_classifications(
 ) -> Result<BTreeMap<String, Vec<AssetClassificationView>>> {
     let mut stmt = conn.prepare(
         "SELECT c.asset_id, d.id, d.name, d.kind, v.id, v.name, v.color,
-                c.source, c.confidence, c.status
+                c.source, c.confidence, c.status, c.method, c.model_id
          FROM classifications c
          JOIN dimension_values v ON v.id = c.dimension_value_id
          JOIN dimensions d ON d.id = v.dimension_id
@@ -534,6 +617,8 @@ pub(crate) fn load_asset_classifications(
                 source: row.get(7)?,
                 confidence: row.get(8)?,
                 status: row.get(9)?,
+                method: row.get(10)?,
+                model_id: row.get(11)?,
             },
         ))
     })?;

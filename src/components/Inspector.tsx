@@ -1,3 +1,4 @@
+import { ImageSuggestions } from "./ImageSuggestions";
 import type { ReactNode } from "react";
 import {
   Aperture,
@@ -106,7 +107,12 @@ export function Inspector({
           <Histogram asset={asset} />
         </InspectorSection>
 
-        <InspectorSection title={t("tags")} className="flush-inspector-section">
+        <ImageSuggestions key={asset.id + ":tags"} asset={asset} dimensions={classificationSchema}
+          kind="tags" busy={tagBusy} onTags={onSetTags}
+          onValue={id => onSetClassification(asset.id, id, true)}
+          render={(button, results) => (
+        <InspectorSection title={t("tags")} titleAction={button} className="flush-inspector-section">
+          {results}
           <div className="tag-manager">
             {asset.tags.length === 0 ? (
               <span className="tag-empty">{t("noTagsYet")}</span>
@@ -139,6 +145,8 @@ export function Inspector({
             </button>
           </div>
         </InspectorSection>
+          )}
+        />
 
         <InspectorSection
           title={t("fileInfo")}
@@ -237,8 +245,13 @@ export function Inspector({
           </InspectorSection>
         )}
 
+        <ImageSuggestions key={asset.id + ":values"} asset={asset} dimensions={classificationSchema}
+          kind="values" busy={classificationBusy} onTags={onSetTags}
+          onValue={id => onSetClassification(asset.id, id, true)}
+          render={(button, results) => (
         <InspectorSection
           title={t("classifications")}
+          titleAction={button}
           className="classification-section"
           action={
             <button
@@ -257,6 +270,7 @@ export function Inspector({
             </button>
           }
         >
+          {results}
           <ClassificationEditor
             classifications={asset.classifications}
             dimensions={classificationSchema}
@@ -267,6 +281,8 @@ export function Inspector({
             onCreateValue={onCreateClassificationValue}
           />
         </InspectorSection>
+          )}
+        />
 
       </aside>
     );
@@ -305,17 +321,19 @@ function InspectorSection({
   title,
   className = "",
   action,
+  titleAction,
   children,
 }: {
   title: string;
   className?: string;
   action?: ReactNode;
+  titleAction?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className={`inspector-section ${className}`.trim()}>
       <div className="inspector-section-heading">
-        <h3>{title}</h3>
+        <div className="inspector-section-title"><h3>{title}</h3>{titleAction}</div>
         {action}
       </div>
       <div className="inspector-section-body">{children}</div>

@@ -1,3 +1,4 @@
+pub mod classification;
 pub mod database;
 pub mod error;
 pub mod filesystem;
@@ -8,6 +9,7 @@ pub mod types;
 pub mod watcher;
 pub mod workspace;
 
+pub use classification::{DerivedClassification, TimeBand};
 pub use error::{GrapesError, Result};
 pub use types::{
     AssetClassificationView, AssetView, DimensionValueView, DimensionView, FolderView, GraphEdge,

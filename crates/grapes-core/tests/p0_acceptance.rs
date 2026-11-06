@@ -41,13 +41,13 @@ fn initializes_sidecar_and_database_migrations() {
     )
     .expect("manifest json");
     assert_eq!(manifest["schemaVersion"], 1);
-    assert_eq!(snapshot.workspace.schema_version, 10);
+    assert_eq!(snapshot.workspace.schema_version, 11);
 
     let connection = Connection::open(temp.path().join(".grapes/grapes.db")).expect("database");
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     let table_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
@@ -89,7 +89,7 @@ fn upgrades_an_existing_v1_database_in_place() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        10
+        11
     );
     let connection = Connection::open(database_path).expect("database");
     let operations_table: i64 = connection
@@ -100,6 +100,76 @@ fn upgrades_an_existing_v1_database_in_place() {
         )
         .expect("operations table");
     assert_eq!(operations_table, 1);
+}
+
+#[test]
+fn upgrades_a_v10_database_with_classification_provenance() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("grapes.db");
+    {
+        let connection = Connection::open(&database_path).expect("database");
+        for migration in [
+            include_str!("../src/database/migrations/001_core.sql"),
+            include_str!("../src/database/migrations/002_operations.sql"),
+            include_str!("../src/database/migrations/003_asset_tags.sql"),
+            include_str!("../src/database/migrations/004_graphspaces.sql"),
+            include_str!("../src/database/migrations/005_classifications.sql"),
+            include_str!("../src/database/migrations/006_semantic_search.sql"),
+            include_str!("../src/database/migrations/007_ask_grapes_provider.sql"),
+            include_str!("../src/database/migrations/008_provider_api_keys.sql"),
+            include_str!("../src/database/migrations/009_restore_ask_grapes_provider.sql"),
+            include_str!("../src/database/migrations/010_provider_runtime.sql"),
+        ] {
+            connection
+                .execute_batch(migration)
+                .expect("pre-v11 migration");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces(id, root_path, created_at, last_opened_at)
+                 VALUES ('workspace', 'C:\\photos', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                 INSERT INTO folders(id, parent_id, name, created_at, updated_at)
+                 VALUES ('folder', NULL, 'photos', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                 INSERT INTO assets(id, folder_id, filename, created_at, updated_at)
+                 VALUES ('asset', 'folder', 'photo.jpg', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                 INSERT INTO classifications(
+                     asset_id, dimension_value_id, source, confidence, status, created_at
+                 ) VALUES ('asset', 'dimension:time:night', 'manual', 1.0, 'accepted', '2026-01-01T00:00:00Z');",
+            )
+            .expect("legacy classification");
+        connection
+            .pragma_update(None, "user_version", 10)
+            .expect("v10 version");
+    }
+
+    let database = grapes_core::database::Database::open(&database_path).expect("upgrade to v11");
+    assert_eq!(database.schema_version().expect("schema version"), 11);
+    let dimensions = database.dimensions().expect("dimensions");
+    let time = dimensions
+        .iter()
+        .find(|dimension| dimension.id == "dimension:time")
+        .expect("time dimension");
+    assert_eq!(time.cardinality, "single");
+    assert_eq!(time.origin, "derived");
+
+    let connection = Connection::open(&database_path).expect("database");
+    let provenance_columns: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('classifications')
+             WHERE name IN ('method', 'model_id', 'prompt_version', 'evidence')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("provenance columns");
+    assert_eq!(provenance_columns, 4);
+    let method: Option<String> = connection
+        .query_row(
+            "SELECT method FROM classifications WHERE asset_id = 'asset'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("legacy method");
+    assert_eq!(method.as_deref(), Some("manual"));
 }
 
 #[test]
@@ -140,7 +210,7 @@ fn restores_ask_provider_settings_from_an_interim_schema_8_workspace() {
             .expect("snapshot")
             .workspace
             .schema_version,
-        10
+        11
     );
     assert_eq!(
         workspace
@@ -237,8 +307,13 @@ fn reconciliation_generates_and_reuses_thumbnail_cache() {
     assert_eq!(
         workspace
             .asset_path(&asset_id)
-            .expect("original asset path"),
-        temp.path().join("large.jpg")
+            .expect("original asset path")
+            .canonicalize()
+            .expect("canonical asset path"),
+        temp.path()
+            .join("large.jpg")
+            .canonicalize()
+            .expect("canonical photo path")
     );
     let second_report = workspace.reconcile().expect("second reconcile");
     assert_eq!(second_report.thumbnails_created, 0);
@@ -393,7 +468,18 @@ fn classifications_custom_dimensions_and_smart_graphs_persist() {
     let mut workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
     let asset_id = workspace.snapshot().expect("snapshot").assets[0].id.clone();
     let schema = workspace.classification_schema().expect("schema");
-    assert!(schema.iter().any(|dimension| dimension.kind == "time"));
+    let time_dimension = schema
+        .iter()
+        .find(|dimension| dimension.kind == "time")
+        .expect("time dimension");
+    assert_eq!(time_dimension.cardinality, "single");
+    assert_eq!(time_dimension.origin, "derived");
+    let tone_dimension = schema
+        .iter()
+        .find(|dimension| dimension.kind == "tone")
+        .expect("tone dimension");
+    assert_eq!(tone_dimension.cardinality, "multi");
+    assert_eq!(tone_dimension.origin, "derived");
     assert!(schema.iter().any(|dimension| dimension.kind == "weather"));
     assert!(schema.iter().any(|dimension| dimension.kind == "type"));
     assert!(schema.iter().any(|dimension| dimension.kind == "tone"));
@@ -416,6 +502,10 @@ fn classifications_custom_dimensions_and_smart_graphs_persist() {
         .classifications
         .iter()
         .all(|classification| classification.source == "manual"));
+    assert!(classified.assets[0]
+        .classifications
+        .iter()
+        .all(|classification| classification.method.as_deref() == Some("manual")));
 
     let mood = workspace
         .create_custom_dimension("Mood")
@@ -526,6 +616,85 @@ fn classifications_custom_dimensions_and_smart_graphs_persist() {
         .classifications
         .iter()
         .any(|classification| classification.value_id == "dimension:weather:rain"));
+}
+
+#[test]
+fn deterministic_time_and_tone_classifications_are_applied_and_respect_manual_values() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("warm.png");
+    image::RgbImage::from_pixel(64, 64, image::Rgb([230, 150, 60]))
+        .save(&path)
+        .expect("save warm image");
+
+    let mut workspace = Workspace::open_and_reconcile(temp.path()).expect("workspace");
+    let asset_id = workspace.snapshot().expect("snapshot").assets[0].id.clone();
+
+    // 20:50 in Vancouver on a July evening is inside the golden-hour band.
+    let database_path = temp.path().join(".grapes/grapes.db");
+    {
+        let connection = Connection::open(&database_path).expect("database");
+        let metadata_json: String = connection
+            .query_row(
+                "SELECT metadata_json FROM assets WHERE id = ?1",
+                [asset_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("metadata json");
+        let mut metadata: serde_json::Value =
+            serde_json::from_str(&metadata_json).expect("metadata value");
+        metadata["capturedOffsetMinutes"] = serde_json::json!(-420);
+        connection
+            .execute(
+                "UPDATE assets
+                 SET captured_at = '2026-07-21T20:50:00',
+                     gps_lat = 49.2827, gps_lon = -123.1207,
+                     metadata_json = ?2
+                 WHERE id = ?1",
+                rusqlite::params![asset_id.as_str(), metadata.to_string()],
+            )
+            .expect("update asset metadata");
+    }
+
+    let suggestions = workspace
+        .apply_derived_classifications(&asset_id)
+        .expect("derived classifications");
+    assert!(suggestions
+        .iter()
+        .any(|item| item.value_id == "dimension:time:golden-hour"));
+    assert!(suggestions
+        .iter()
+        .any(|item| item.value_id == "dimension:tone:warm"));
+
+    let classified = workspace.snapshot().expect("snapshot");
+    let classifications = &classified.assets[0].classifications;
+    assert!(classifications.iter().any(|item| {
+        item.value_id == "dimension:time:golden-hour"
+            && item.source == "derived"
+            && item.method.as_deref() == Some("solar-elevation")
+    }));
+    assert!(classifications.iter().any(|item| {
+        item.value_id == "dimension:tone:warm"
+            && item.source == "derived"
+            && item.method.as_deref() == Some("pixel-lab")
+    }));
+    assert!(classifications.iter().all(|item| item.confidence.is_some()));
+
+    // A manual value in the same dimension wins: derived rows are dropped, the
+    // user's Night survives, and no Golden Hour row is re-created.
+    workspace
+        .set_asset_classification(&asset_id, "dimension:time:night", true)
+        .expect("manual time classification");
+    workspace
+        .apply_derived_classifications(&asset_id)
+        .expect("recompute");
+    let after_manual = workspace.snapshot().expect("snapshot");
+    let time_values = after_manual.assets[0]
+        .classifications
+        .iter()
+        .filter(|item| item.dimension_id == "dimension:time")
+        .map(|item| item.value_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(time_values, vec!["dimension:time:night"]);
 }
 
 #[test]

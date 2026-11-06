@@ -267,6 +267,8 @@ mod tests {
                 kind: "weather".into(),
                 sort_order: 10,
                 system_defined: true,
+                cardinality: "single".into(),
+                origin: "manual".into(),
                 values: vec![
                     DimensionValueView {
                         id: "dimension:weather:rain".into(),
@@ -294,6 +296,8 @@ mod tests {
                 kind: "tone".into(),
                 sort_order: 20,
                 system_defined: true,
+                cardinality: "multi".into(),
+                origin: "derived".into(),
                 values: vec![DimensionValueView {
                     id: "dimension:tone:cool".into(),
                     dimension_id: "dimension:tone".into(),

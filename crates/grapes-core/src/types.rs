@@ -59,6 +59,12 @@ pub struct DimensionView {
     pub kind: String,
     pub sort_order: i64,
     pub system_defined: bool,
+    /// `single` when at most one accepted value is meaningful for this
+    /// dimension, `multi` when several values may coexist.
+    pub cardinality: String,
+    /// `derived` (computed from metadata/pixels), `manual` (asserted by a user
+    /// or model), or `hybrid`.
+    pub origin: String,
     pub values: Vec<DimensionValueView>,
 }
 
@@ -74,6 +80,8 @@ pub struct AssetClassificationView {
     pub source: String,
     pub confidence: Option<f64>,
     pub status: String,
+    pub method: Option<String>,
+    pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

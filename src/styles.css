@@ -3168,3 +3168,48 @@ body.sidebar-resizing {
     display: none;
   }
 }
+
+.inspector-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.image-suggestion-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.image-suggestion-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  background: rgba(169, 135, 255, 0.18);
+  pointer-events: none;
+}
+
+.image-suggestion-progress > span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 2px;
+  background: #a987ff;
+  animation: image-suggestion-progress 1.3s ease-in-out infinite;
+}
+
+@keyframes image-suggestion-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(350%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-suggestion-progress > span {
+    animation: none;
+    width: 100%;
+    opacity: 0.65;
+  }
+}

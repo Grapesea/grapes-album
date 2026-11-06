@@ -6,6 +6,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::classification::{self, DerivedClassification};
 use crate::database::{
     insert_asset_tx, insert_folder_tx, load_asset_classifications, load_asset_tags, load_assets,
     load_folders, now, record_reconcile_tx, update_asset_tx, update_folder_tx, AssetRow,
@@ -946,6 +947,62 @@ impl Workspace {
         self.db.asset(asset_id)?;
         self.db
             .set_asset_classification(asset_id, value_id, selected)
+    }
+
+    /// Compute the deterministic Time/Tone suggestions for an asset without
+    /// writing anything. Returns an empty list when the classifiers abstain.
+    pub fn derived_classifications(&self, asset_id: &str) -> Result<Vec<DerivedClassification>> {
+        let asset = self.db.asset(asset_id)?;
+        Ok(self.compute_derived_classifications(&asset))
+    }
+
+    /// Recompute and persist deterministic classifications for one asset.
+    ///
+    /// Derived rows are tagged `source = 'derived'`, so refreshing them never
+    /// removes manual or model rows. If the asset already holds a non-derived
+    /// value in a dimension, that dimension is left untouched (stale derived
+    /// rows are still cleaned up).
+    pub fn apply_derived_classifications(
+        &mut self,
+        asset_id: &str,
+    ) -> Result<Vec<DerivedClassification>> {
+        let asset = self.db.asset(asset_id)?;
+        let suggestions = self.compute_derived_classifications(&asset);
+        for dimension_id in [
+            classification::TIME_DIMENSION_ID,
+            classification::TONE_DIMENSION_ID,
+        ] {
+            let dimension_suggestions = suggestions
+                .iter()
+                .filter(|suggestion| suggestion.dimension_id == dimension_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            self.db.replace_derived_classifications(
+                asset_id,
+                dimension_id,
+                &dimension_suggestions,
+            )?;
+        }
+        Ok(suggestions)
+    }
+
+    fn compute_derived_classifications(&self, asset: &AssetRow) -> Vec<DerivedClassification> {
+        let metadata = metadata_from_row(asset);
+        let mut suggestions = Vec::new();
+        if let Some(time) = classification::classify_time(
+            metadata.captured_at.as_deref(),
+            metadata.captured_offset_minutes,
+            metadata.gps_lat.zip(metadata.gps_lon),
+        ) {
+            suggestions.push(time);
+        }
+        if let Some(hash) = asset.content_hash.as_deref() {
+            let thumbnail = thumbnail_path(&self.root.join(".grapes/thumbnails"), hash);
+            if let Ok(decoded) = image::open(&thumbnail) {
+                suggestions.extend(classification::classify_tone(&decoded.to_rgb8()));
+            }
+        }
+        suggestions
     }
 
     pub fn create_custom_dimension(&mut self, name: &str) -> Result<DimensionView> {

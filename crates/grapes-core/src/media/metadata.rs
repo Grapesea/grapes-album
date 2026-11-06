@@ -12,6 +12,9 @@ pub struct MediaMetadata {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub captured_at: Option<String>,
+    /// Camera-local offset from UTC in minutes, taken from EXIF
+    /// `OffsetTimeOriginal` / `OffsetTime` when the camera wrote one.
+    pub captured_offset_minutes: Option<i32>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
     pub lens_model: Option<String>,
@@ -28,6 +31,7 @@ pub struct MediaMetadata {
 #[derive(Debug, Default)]
 struct ExifMetadata {
     captured_at: Option<String>,
+    captured_offset_minutes: Option<i32>,
     camera_make: Option<String>,
     camera_model: Option<String>,
     lens_model: Option<String>,
@@ -65,6 +69,7 @@ pub fn extract_metadata(path: &Path) -> MediaMetadata {
             metadata.height = exif.height;
         }
         metadata.captured_at = exif.captured_at;
+        metadata.captured_offset_minutes = exif.captured_offset_minutes;
         metadata.camera_make = exif.camera_make;
         metadata.camera_model = exif.camera_model;
         metadata.lens_model = exif.lens_model;
@@ -88,6 +93,9 @@ fn read_exif(path: &Path) -> Option<ExifMetadata> {
         captured_at: field_text(&exif, Tag::DateTimeOriginal)
             .or_else(|| field_text(&exif, Tag::DateTime))
             .map(|value| normalize_datetime(&value)),
+        captured_offset_minutes: field_text(&exif, Tag::OffsetTimeOriginal)
+            .or_else(|| field_text(&exif, Tag::OffsetTime))
+            .and_then(|value| parse_offset_minutes(&value)),
         camera_make: field_text(&exif, Tag::Make).map(clean_text),
         camera_model: field_text(&exif, Tag::Model).map(clean_text),
         lens_model: field_text(&exif, Tag::LensModel)
@@ -191,6 +199,35 @@ fn normalize_datetime(value: &str) -> String {
     }
 }
 
+/// Parse an EXIF timezone offset such as `+08:00`, `-0530` or `Z` into minutes.
+fn parse_offset_minutes(value: &str) -> Option<i32> {
+    let value = value.trim().trim_matches('"').trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.eq_ignore_ascii_case("Z") {
+        return Some(0);
+    }
+    let sign = match value.as_bytes().first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let body = &value[1..];
+    let (hours, minutes) = match body.len() {
+        5 if body.as_bytes()[2] == b':' => (&body[0..2], &body[3..5]),
+        4 => (&body[0..2], &body[2..4]),
+        2 => (body, "00"),
+        _ => return None,
+    };
+    let hours: i32 = hours.parse().ok()?;
+    let minutes: i32 = minutes.parse().ok()?;
+    if hours > 14 || minutes > 59 {
+        return None;
+    }
+    Some(sign * (hours * 60 + minutes))
+}
+
 fn round_one_decimal(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
@@ -219,6 +256,18 @@ mod tests {
             normalize_datetime("2026:11:02 08:30:15"),
             "2026-11-02T08:30:15"
         );
+    }
+
+    #[test]
+    fn parses_exif_timezone_offsets() {
+        assert_eq!(parse_offset_minutes("+08:00"), Some(480));
+        assert_eq!(parse_offset_minutes("-05:30"), Some(-330));
+        assert_eq!(parse_offset_minutes("+0800"), Some(480));
+        assert_eq!(parse_offset_minutes("Z"), Some(0));
+        assert_eq!(parse_offset_minutes("+14:00"), Some(840));
+        assert_eq!(parse_offset_minutes("+15:00"), None);
+        assert_eq!(parse_offset_minutes("08:00"), None);
+        assert_eq!(parse_offset_minutes("garbage"), None);
     }
 
     #[test]

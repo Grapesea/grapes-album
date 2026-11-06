@@ -59,6 +59,7 @@ impl AskCancellation {
 struct AppState {
     session: Mutex<Option<Session>>,
     ask_cancellations: Mutex<HashMap<String, Arc<AskCancellation>>>,
+    recommendation_cancellations: Mutex<HashMap<String, Arc<AskCancellation>>>,
 }
 
 #[derive(Serialize)]
@@ -441,6 +442,126 @@ fn save_semantic_provider(
         .save_semantic_provider(&config)
         .map_err(error_string)?;
     semantic_settings_for(&workspace)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImageSuggestions {
+    tags: Vec<String>,
+    value_ids: Vec<String>,
+}
+
+#[tauri::command]
+async fn recommend_asset(
+    state: State<'_, AppState>,
+    asset_id: String,
+    request_id: String,
+) -> std::result::Result<ImageSuggestions, String> {
+    let cancellation = Arc::new(AskCancellation::default());
+    state
+        .recommendation_cancellations
+        .lock()
+        .map_err(|_| "分析请求状态锁已损坏".to_owned())?
+        .insert(request_id.clone(), cancellation.clone());
+    let result = match select(
+        Box::pin(run_recommend_asset(&state, asset_id)),
+        Box::pin(cancellation.cancelled()),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result,
+        Either::Right(((), _)) => Err("分析已停止".into()),
+    };
+    if let Ok(mut jobs) = state.recommendation_cancellations.lock() {
+        jobs.remove(&request_id);
+    }
+    result
+}
+
+#[tauri::command]
+fn cancel_recommend_asset(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> std::result::Result<(), String> {
+    if let Some(job) = state
+        .recommendation_cancellations
+        .lock()
+        .map_err(|_| "分析请求状态锁已损坏".to_owned())?
+        .get(&request_id)
+    {
+        job.cancel();
+    }
+    Ok(())
+}
+
+async fn run_recommend_asset(
+    state: &State<'_, AppState>,
+    asset_id: String,
+) -> std::result::Result<ImageSuggestions, String> {
+    let workspace = active_workspace(&state)?;
+    let (config, path, schema, asset) = {
+        let workspace = workspace.lock().map_err(|_| "工作区锁已损坏".to_owned())?;
+        let asset = workspace
+            .snapshot()
+            .map_err(error_string)?
+            .assets
+            .into_iter()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("相片不存在")?;
+        (
+            workspace
+                .ask_grapes_provider_config()
+                .map_err(error_string)?,
+            workspace
+                .asset_thumbnail_path(&asset_id)
+                .map_err(error_string)?,
+            workspace.classification_schema().map_err(error_string)?,
+            asset,
+        )
+    };
+    if !config.enabled {
+        return Err("请启用 Ask Grapes 多模态模型".into());
+    }
+    let key = config
+        .api_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+        .ok_or("请先配置 Ask Grapes API Key 和支持图片的模型")?;
+    let allowed = schema
+        .into_iter()
+        .filter(|d| d.kind != "time" && d.kind != "location")
+        .flat_map(|d| d.values)
+        .collect::<Vec<_>>();
+    let jpeg = provider_jpeg(&path).map_err(error_string)?;
+    let content = SemanticProviderClient::new()
+        .map_err(error_string)?
+        .recommend_image(&config, key, &jpeg, &serde_json::json!(allowed))
+        .await
+        .map_err(error_string)?;
+    let mut result: ImageSuggestions =
+        serde_json::from_str(&content).map_err(|_| "模型返回了无效建议，请重试".to_owned())?;
+    result.tags = result
+        .tags
+        .into_iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| {
+            !s.is_empty()
+                && s.chars().count() <= 40
+                && !s.chars().any(char::is_control)
+                && !asset.tags.iter().any(|tag| tag.eq_ignore_ascii_case(s))
+        })
+        .take(8)
+        .collect();
+    result.tags.sort();
+    result.tags.dedup();
+    result.value_ids.retain(|id| {
+        allowed.iter().any(|v| &v.id == id)
+            && !asset.classifications.iter().any(|v| &v.value_id == id)
+    });
+    result.value_ids.sort();
+    result.value_ids.dedup();
+    result.value_ids.truncate(8);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1310,6 +1431,8 @@ pub fn run() {
             semantic_settings,
             save_semantic_provider,
             test_semantic_provider,
+            recommend_asset,
+            cancel_recommend_asset,
             rebuild_semantic_index,
             semantic_search,
             cancel_ask_grapes

@@ -45,6 +45,8 @@ export interface Dimension {
   kind: string;
   sortOrder: number;
   systemDefined: boolean;
+  cardinality: "single" | "multi";
+  origin: "derived" | "manual" | "hybrid";
   values: DimensionValue[];
 }
 
@@ -58,6 +60,8 @@ export interface AssetClassification {
   source: string;
   confidence: number | null;
   status: string;
+  method: string | null;
+  modelId: string | null;
 }
 
 export interface SmartGraphFilter {
@@ -69,6 +73,7 @@ export interface PhotoMetadata {
   width: number | null;
   height: number | null;
   capturedAt: string | null;
+  capturedOffsetMinutes: number | null;
   cameraMake: string | null;
   cameraModel: string | null;
   lensModel: string | null;
